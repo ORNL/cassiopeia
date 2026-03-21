@@ -509,7 +509,10 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
   const [prioMethodology, setPrioMethodology] = useState(0.5);
   const [prioReprod, setPrioReprod] = useState(0.6);
 
-  const [tab, setTab] = useState("profile");
+  const [tab, setTab] = useState(() => {
+    const p = new URLSearchParams(globalThis.location.search).get("tab");
+    return p || "profile";
+  });
   const [expPaper, setExpPaper] = useState(null);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);

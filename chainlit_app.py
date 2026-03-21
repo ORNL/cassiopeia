@@ -40,6 +40,7 @@ litellm.drop_params = True
 
 _MODEL = os.environ.get("LLM_CHAT_MODEL", "anthropic/claude-sonnet-4-6")
 _API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
+_DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5173")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -971,7 +972,7 @@ async def _display_results(results: dict) -> None:
     if contradictions:
         options.append(f"type **contradictions** to see {len(contradictions)} conflict(s)")
 
-    lines = [f"Open the **[dashboard]({_API_BASE})** to explore the full results interactively."]
+    lines = [f"Open the **[dashboard]({_DASHBOARD_URL}?tab=results)** to explore the full results interactively."]
     if options:
         lines.append("Here in chat you can also: " + ", or ".join(options) + ".")
     await cl.Message(content="\n".join(lines)).send()
