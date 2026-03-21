@@ -1,4 +1,5 @@
-# APPL Literature Mining Agent
+# Cassiopeia
+## Context-Aware Semantic Search for Inspiring Original Plant Experiments and Investigations at APPL  
 
 An [Academy](https://github.com/proxystore/academy)-based agent that continuously monitors plant biology literature, scores retrieved papers against a researcher's profile, and proposes novel experiment combinations.
 
