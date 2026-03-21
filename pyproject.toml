@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cassiopeia"
+version = "0.1.0"
+description = "Context-Aware Semantic Search for Inspiring Original Plant Experiments and Investigations at APPL"
+requires-python = ">=3.11"
+dependencies = [
+    "academy-py>=0.2",
+    "aiohttp>=3.9",
+    "pydantic>=2.0",
+    "fastapi>=0.111",
+    "uvicorn[standard]>=0.30",
+    "litellm>=1.40",
+    "chainlit>=1.0",
+    "python-dotenv>=1.0",
+    "httpx>=0.27",
+    "langchain-core>=0.3",
+    "langgraph>=0.2",
+    "langchain-community>=0.3",
+    "chromadb>=0.4",
+    "sentence-transformers>=2.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "ruff>=0.1",
+    "mypy>=1.5",
+]
+# MCP integration layer — required to run mcp_server.py alongside APPL-Agent
+mcp = [
+    "mcp[cli]>=1.0",
+]
+# Install everything at once
+all = [
+    "cassiopeia[dev,mcp]",
+]
+
+[tool.setuptools.packages.find]
+exclude = ["main*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
