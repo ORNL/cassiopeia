@@ -100,7 +100,6 @@ class _EuropePMCFetcher(BaseFetcher):
             "format": "json",
             "pageSize": min(max_results, 25),
             "resultType": "core",
-            "sort": "P_PDATE desc",  # newest first — avoids returning identical top-N on every run
         }
 
         logger.info(
