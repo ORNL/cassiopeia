@@ -12,7 +12,7 @@
 
 ### macOS (Homebrew)
 
-If any prerequisite is missing, install [Homebrew](https://brew.sh) first, then:
+Install [Homebrew](https://brew.sh) if not already present, then:
 
 ```bash
 brew install python@3.11 node tmux
@@ -23,6 +23,35 @@ Python 3.11 will be available as `python3.11`; create your virtual environment w
 ```bash
 python3.11 -m venv .venv
 ```
+
+### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt update
+sudo apt install python3.11 python3.11-venv python3-pip tmux
+```
+
+Install Node.js 18+ via the [NodeSource](https://github.com/nodesource/distributions) setup script:
+
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+```
+
+### Windows (WSL 2 — recommended)
+
+Cassiopeia uses tmux and a bash launcher, so **WSL 2** (Windows Subsystem for Linux) is the recommended environment on Windows. Once WSL 2 is set up with Ubuntu, follow the Linux instructions above.
+
+To install WSL 2:
+
+```powershell
+# Run in PowerShell as Administrator
+wsl --install
+```
+
+Reboot when prompted, then open the Ubuntu terminal and run the Linux steps.
+
+> **Native Windows (without WSL)** is not supported by `launch.sh`. You can still start each service manually — see the *Running without tmux* section below.
 
 ---
 
@@ -104,6 +133,25 @@ Stop everything with:
 ```bash
 ./launch.sh stop
 ```
+
+---
+
+## Running without tmux (native Windows or minimal environments)
+
+Start each service in a separate terminal, from the project root:
+
+```bash
+# Terminal 1 — API server
+uvicorn api_server:app --port 8000 --reload
+
+# Terminal 2 — Chat interface
+chainlit run chainlit_app.py --port 8001 --headless
+
+# Terminal 3 — Dashboard
+cd frontend && npm run dev
+```
+
+Then open **[http://localhost:5173](http://localhost:5173)** in your browser.
 
 ---
 
