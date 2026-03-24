@@ -61,7 +61,7 @@ The data engine. It:
 - Scores each returned paper using an LLM (species match, stress match, method match, one hypothesis sentence) plus three rule-based metrics (recency, journal credibility, novelty vs. already-seen papers).
 - Runs continuously in the background to pick up new papers over time without requiring you to trigger anything manually.
 
-> **Profile recognition across sessions:** Your identity is established by the name you enter on the landing page — "Fred Suter" always maps to the same internal ID (`fred_suter`). From your **second session onwards** (once at least one search has completed and your profile has been saved), the system retrieves your last-used settings from the database and shows them straight away, asking only "shall I run again with these settings?" Your paper knowledge base and all scoring results from previous sessions are also available immediately on reconnect.
+> **Profile recognition across sessions:** Your identity is established by the name you enter on the landing page — "Alex Doe" always maps to the same internal ID (`alex_doe`). From your **second session onwards** (once at least one search has completed and your profile has been saved), the system retrieves your last-used settings from the database and shows them straight away, asking only "shall I run again with these settings?" Your paper knowledge base and all scoring results from previous sessions are also available immediately on reconnect.
 
 ### 2.3 The Semantic Search Agent
 

@@ -501,9 +501,7 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
   const [species, setSpecies] = useState(["poplar", "arabidopsis"]);
   const [stresses, setStresses] = useState(["drought", "nutrient"]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
-  const [researchPrompt, setResearchPrompt] = useState(
-    "I'm interested in understanding how root architecture adapts to combined drought and nitrogen limitation, particularly looking at genotypic variation in fine root proliferation and its relationship to above-ground stress markers detectable via hyperspectral reflectance."
-  );
+  const [researchPrompt, setResearchPrompt] = useState("");
   const [sources, setSources] = useState(["biorxiv", "pubmed", "plos_one", "frontiers", "plant_physiology"]);
   const [timeRange, setTimeRange] = useState(12);
 
