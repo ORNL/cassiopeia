@@ -170,6 +170,17 @@ If you see papers listed with relevance scores the installation is working corre
 
 ---
 
+## Resetting to a clean state
+
+```bash
+./clean.sh          # remove runtime data (database, vector store, caches)
+./clean.sh --full   # also remove .venv and frontend/node_modules
+```
+
+Both modes ask for confirmation before deleting anything, and stop the running tmux session first if one is active.
+
+---
+
 ## Troubleshooting
 
 **`launch.sh` exits with "Missing required tools"**
