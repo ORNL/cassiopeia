@@ -21,6 +21,23 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     exit 0
 fi
 
+# ── Prerequisites ────────────────────────────────────────────────────────────
+_missing=()
+command -v python3 &>/dev/null || _missing+=("python3 (≥3.11)")
+command -v npm    &>/dev/null || _missing+=("npm (Node.js ≥18)")
+command -v tmux   &>/dev/null || _missing+=("tmux")
+if [[ ${#_missing[@]} -gt 0 ]]; then
+    echo "ERROR: Missing required tools: ${_missing[*]}"
+    echo "  Install them and retry. See INSTALL.md for details."
+    exit 1
+fi
+# Python version check (need ≥3.11)
+_pyver=$(python3 -c "import sys; print(sys.version_info[:2])" 2>/dev/null)
+if ! python3 -c "import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)" 2>/dev/null; then
+    echo "ERROR: Python 3.11 or later is required (found $_pyver)."
+    exit 1
+fi
+
 # ── Resolve project root ─────────────────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
