@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """RAG agent: ChromaDB owner and semantic Q&A synthesiser.
 
 This Academy agent is the sole writer to ChromaDB.  It:

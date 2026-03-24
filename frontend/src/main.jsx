@@ -1,3 +1,6 @@
+// Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+// SPDX-License-Identifier: Apache-2.0
+
 import { StrictMode, useState, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import PropTypes from "prop-types";

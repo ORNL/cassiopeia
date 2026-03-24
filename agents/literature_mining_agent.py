@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """APPL Literature Mining & Hypothesis Generation Agent.
 
 An Academy-compatible agent that:

@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """ChromaDB-backed vector store for semantic paper search."""
 
 from __future__ import annotations

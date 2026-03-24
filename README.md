@@ -392,42 +392,6 @@ FastAPI automatically serves the built frontend at `/` when `frontend/dist/` exi
 
 ---
 
-## Using the agent programmatically
-
-The agent can be driven directly via `main.py` without the web interface:
-
-```bash
-python main.py
-```
-
-Or from Python:
-
-```python
-from academy.exchange import LocalExchangeFactory
-from academy.manager import Manager
-from concurrent.futures import ThreadPoolExecutor
-from agents.literature_mining_agent import LiteratureMiningAgent
-
-async with await Manager.from_exchange_factory(
-    factory=LocalExchangeFactory(),
-    executors=ThreadPoolExecutor(max_workers=4),
-) as manager:
-    handle = await manager.launch(LiteratureMiningAgent)
-
-    await handle.register_researcher(
-        researcher_id="r1",
-        name="Dr. Smith",
-        plant_species=["poplar"],
-        stress_types=["drought"],
-        phenotyping_methods=["hyperspectral_imaging"],
-    )
-
-    result = await handle.trigger_search("r1")
-    papers = await handle.get_top_papers("r1", limit=10)
-```
-
----
-
 ## Project layout
 
 ```text
@@ -450,7 +414,6 @@ cassiopeia/
 │       └── Dashboard.jsx        # Structured profile + results UI
 ├── api_server.py                    # FastAPI bridge (HTTP ↔ Academy)
 ├── chainlit_app.py                  # Conversational profile interface (LangGraph)
-├── main.py                          # Standalone launcher (no web UI)
 ├── pyproject.toml
 └── .env.example                     # All configurable env vars
 ```

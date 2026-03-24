@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """MCP server interface for Cassiopeia.
 
 Exposes literature mining and RAG capabilities as MCP tools so that

@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """SQLite-backed persistence for profiles, papers, and LLM cache."""
 
 from __future__ import annotations

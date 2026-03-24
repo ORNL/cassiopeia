@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """Source fetchers for literature repositories.
 
 Each fetcher implements the same interface: given a SearchQuery, return a list

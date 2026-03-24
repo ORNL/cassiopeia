@@ -1,3 +1,6 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+
 """LiteLLM-backed paper scorer.
 
 Replaces keyword matching with LLM reading comprehension for the three
