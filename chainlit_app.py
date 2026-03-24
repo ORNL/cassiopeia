@@ -240,8 +240,13 @@ def _topics_covered_by(extracted: dict) -> set[str]:
 def _merge_into_profile(profile: dict, extracted: dict) -> None:
     """Update profile in-place with non-null fields from extraction."""
     for k, v in extracted.items():
-        if v is not None:
-            profile[k] = v
+        if v is None:
+            continue
+        # Guard against nonsensical zero values that indicate the LLM
+        # returned a default instead of null for an unspecified field.
+        if k == "time_range_months" and v == 0:
+            continue
+        profile[k] = v
 
 
 def _pending_questions(covered: set) -> str:
@@ -269,7 +274,7 @@ def _profile_summary(profile: dict) -> str:
     stresses = ", ".join(profile.get("stress_types") or []) or "—"
     keywords = ", ".join(profile.get("expertise_keywords") or []) or "—"
     sources = ", ".join(profile.get("source_targets") or []) or "all"
-    months = profile.get("time_range_months", 12)
+    months = profile.get("time_range_months") or 12  # 0 months is nonsensical, default to 12
     pn = profile.get("priority_novelty", 0.5)
     pr = profile.get("priority_relevance", 0.5)
     pm = profile.get("priority_methodology", 0.5)
@@ -313,11 +318,20 @@ async def _handle_collecting(text: str) -> None:
 
 
 async def _handle_confirm_stage(text: str, text_lower: str) -> None:
-    """Handle user input at the confirmation step: confirm → search, else apply correction."""
+    """Handle user input at the confirmation step: confirm → search, reset → new collection,
+    else apply correction."""
     if _is_confirmation(text_lower):
         cl.user_session.set("profile_stage", None)
         profile = dict(cl.user_session.get("pending_profile") or {})
         await _do_search(profile)
+    elif _is_reset_request(text_lower):
+        rname = cl.user_session.get("researcher_name") or "researcher"
+        cl.user_session.set("profile_stage", "collecting")
+        cl.user_session.set("pending_profile", {})
+        cl.user_session.set("topics_covered", [])
+        await cl.Message(
+            content=f"Sure! Let's set up a fresh search, **{rname}**.\n\n{_all_topics_prompt()}"
+        ).send()
     else:
         correction = await _extract_correction(text)
         profile = cl.user_session.get("pending_profile") or {}
@@ -507,12 +521,23 @@ _CONFIRM_WORDS = frozenset({
     "let's go", "fire away", "all good", "right",
 })
 
+_RESET_PHRASES = (
+    "new search", "start over", "start fresh", "restart", "reset",
+    "set up a new", "setup a new", "different search", "fresh search",
+    "from scratch",
+)
+
 
 def _is_confirmation(text: str) -> bool:
     t = text.strip().lower().rstrip("!.,")
     return t in _CONFIRM_WORDS or any(
         w in t for w in ("yes", "go ahead", "looks good", "run it", "proceed")
     )
+
+
+def _is_reset_request(text_lower: str) -> bool:
+    """Return True if the user wants to discard the current profile and start over."""
+    return any(phrase in text_lower for phrase in _RESET_PHRASES)
 
 
 async def _do_search(profile: dict) -> None:
