@@ -17,6 +17,7 @@ chroma.sqlite3
 # Chainlit auto-generated files
 .chainlit/
 chainlit.md
+.files/
 
 # Frontend
 frontend/node_modules/
