@@ -159,17 +159,9 @@ class RAGAgent(Agent):
     ) -> None:
         super().__init__()
 
-        _db = db_path or os.environ.get(
-            "DB_PATH",
-            str(Path(__file__).parent.parent / "cassiopeia.db"),
-        )
-        _rag_dir = rag_persist_dir or os.environ.get(
-            "RAG_PERSIST_DIR",
-            str(Path(__file__).parent.parent / "chroma_db"),
-        )
-        _emb = embedding_model or os.environ.get(
-            "EMBEDDING_MODEL", "all-MiniLM-L6-v2"
-        )
+        _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
+        _rag_dir = rag_persist_dir or os.environ.get("RAG_PERSIST_DIR") or str(Path(__file__).parent.parent / "chroma_db")
+        _emb = embedding_model or os.environ.get("EMBEDDING_MODEL") or "all-MiniLM-L6-v2"
 
         self._store = PaperStore(_db)
         self._rag = RAGStore(persist_dir=_rag_dir, embedding_model=_emb)

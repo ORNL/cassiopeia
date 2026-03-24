@@ -78,7 +78,7 @@ class LiteratureMiningAgent(Agent):
         self.max_papers_per_query = max_papers_per_query
 
         # Persistent storage
-        _db = db_path or os.environ.get("DB_PATH", str(Path(__file__).parent.parent / "cassiopeia.db"))
+        _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
         self.store = PaperStore(_db)
 
         # Restore state from SQLite
