@@ -25,9 +25,20 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Load .env so we can read port overrides
+if [[ ! -f "$SCRIPT_DIR/.env" ]]; then
+    echo "ERROR: .env not found. Copy .env.example to .env and fill in your API key(s)."
+    exit 1
+fi
 set -o allexport
-[[ -f "$SCRIPT_DIR/.env" ]] && source "$SCRIPT_DIR/.env"
+source "$SCRIPT_DIR/.env"
 set +o allexport
+
+# Validate that at least one LLM API key is configured
+if [[ -z "$ANTHROPIC_API_KEY" && -z "$OPENAI_API_KEY" && -z "$AZURE_API_KEY" && -z "$GEMINI_API_KEY" && -z "$MISTRAL_API_KEY" ]]; then
+    echo "ERROR: No LLM API key found in .env."
+    echo "  Set at least one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, AZURE_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY"
+    exit 1
+fi
 
 API_PORT="${API_PORT:-8000}"
 CHAINLIT_PORT="${CHAINLIT_PORT:-8001}"
