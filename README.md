@@ -190,7 +190,7 @@ The `LiteratureMiningAgent` writes exclusively to SQLite. The `RAGAgent` owns Ch
 
 ### RAG & conversational Q&A
 
-The `RAGAgent` embeds paper abstracts with `sentence-transformers` (`all-MiniLM-L6-v2` by default) and stores them in ChromaDB. When a user asks a question in the Chat interface, a LangGraph `create_react_agent` loop uses a `search_knowledge_base` tool to retrieve relevant passages, then synthesises an answer with the configured `LLM_CHAT_MODEL`.
+The `RAGAgent` embeds paper abstracts using ChromaDB's built-in `DefaultEmbeddingFunction` (`all-MiniLM-L6-v2` via ONNX runtime, ~15 MB — no PyTorch required) and stores them in ChromaDB. When a user asks a question in the Chat interface, a LangGraph `create_react_agent` loop uses a `search_knowledge_base` tool to retrieve relevant passages, then synthesises an answer with the configured `LLM_CHAT_MODEL`.
 
 ---
 
@@ -335,57 +335,60 @@ LLM_SCORING_ENABLED=false
 
 ## Setup
 
-### Python environment
+### Option A — Docker (Windows, recommended for end-users)
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
+
+1. Copy the project folder anywhere on your machine.
+2. Double-click **`cassiopeia-install.bat`** (no admin required).
+   The installer checks Docker, creates `.env` from `.env.example` (opening Notepad so you can fill in your API key), builds the images, and creates **Start / Stop Cassiopeia** shortcuts on your desktop.
+3. Use the desktop shortcuts to start and stop Cassiopeia.
+
+> **Rebuild after updates:** double-click `cassiopeia-rebuild.bat` (pulls new code, rebuilds images, restarts services).
+
+### Option B — Docker (any platform)
 
 ```bash
-cd cassiopeia
+cp .env.example .env          # fill in your API key
+docker compose up --build -d
+```
+
+Open [http://localhost:5173](http://localhost:5173).
+
+### Option C — Native Linux / WSL2
+
+```bash
+# One-time setup
 python -m venv academy
-source academy/bin/activate          # Windows: academy\Scripts\activate
+source academy/bin/activate
 pip install -e ".[dev]"
+cd frontend && npm install && cd ..
+
+# Start all services in a tmux session
+./launch.sh
 ```
 
-This installs all runtime dependencies: `academy-py`, `aiohttp`, `fastapi`, `uvicorn`, `litellm`, `chainlit`, `python-dotenv`, `httpx`, and `pydantic`.
+`launch.sh` checks for port conflicts, pre-loads the embedding model, then starts the API server, Chainlit, and the Vite dev server in separate tmux panes.
 
-### Frontend
-
-```bash
-cd frontend
-npm install
-```
-
----
-
-## Starting the system
-
-Two processes are always required (API server + frontend). A third is needed only if you want the Chat mode tab, which renders Chainlit in an iframe inside the frontend.
-
-### Terminal 1 — API server
+### Manual start (development)
 
 ```bash
-uvicorn api_server:app --port 8000 --reload
-```
+# Terminal 1 — API server
+uvicorn api_server:app --port 8000
 
-### Terminal 2 — Chainlit chat interface *(optional — only needed for Chat mode)*
-
-```bash
+# Terminal 2 — Chainlit (optional, only needed for Chat mode)
 chainlit run chainlit_app.py --port 8001 --headless
+
+# Terminal 3 — Frontend
+cd frontend && npm run dev
 ```
 
-### Terminal 3 — Frontend dev server
+Open [http://localhost:5173](http://localhost:5173).
+
+### Production build (frontend)
 
 ```bash
-cd frontend
-npm run dev
-# Opens at http://localhost:5173
-```
-
-Open [http://localhost:5173](http://localhost:5173). The landing page lets you choose between the structured Dashboard and the AI Chat interface.
-
-### Production build
-
-```bash
-cd frontend
-npm run build          # outputs to frontend/dist/
+cd frontend && npm run build          # outputs to frontend/dist/
 ```
 
 FastAPI automatically serves the built frontend at `/` when `frontend/dist/` exists, so only the API server and (optionally) Chainlit need to run in production.
@@ -406,14 +409,29 @@ cassiopeia/
 │   ├── source_fetchers.py           # Europe PMC + arXiv HTTP clients
 │   ├── persistence.py               # SQLite PaperStore (profiles, papers, sessions, ratings)
 │   ├── paper_scorer.py              # Keyword-based fallback scorer
-│   └── llm_scorer.py                # LiteLLM-backed scorer (primary)
+│   ├── llm_scorer.py                # LiteLLM-backed scorer (primary)
+│   └── rag_store.py                 # ChromaDB wrapper (ONNX embeddings)
 ├── frontend/
-│   └── src/
-│       ├── main.jsx                 # App root + landing page routing
-│       ├── LandingPage.jsx          # Mode picker (Dashboard vs Chat)
-│       └── Dashboard.jsx        # Structured profile + results UI
+│   ├── src/
+│   │   ├── main.jsx                 # App root + landing page routing
+│   │   ├── LandingPage.jsx          # Mode picker (Dashboard vs Chat)
+│   │   └── Dashboard.jsx            # Structured profile + results UI
+│   ├── Dockerfile                   # Nginx image for Docker deployment
+│   └── nginx.conf
+├── docker/
+│   ├── sitecustomize.py             # SSL bypass for corporate proxy (Docker only)
+│   └── preload.py                   # Pre-downloads ONNX model during Docker build
 ├── api_server.py                    # FastAPI bridge (HTTP ↔ Academy)
 ├── chainlit_app.py                  # Conversational profile interface (LangGraph)
+├── mcp_server.py                    # MCP server (APPL-Agent integration)
+├── Dockerfile                       # Python backend image
+├── docker-compose.yml               # Orchestrates api + chat + dashboard containers
+├── cassiopeia-install.bat           # Windows one-click installer
+├── cassiopeia-start.bat             # Windows: start Docker services
+├── cassiopeia-stop.bat              # Windows: stop Docker services
+├── cassiopeia-rebuild.bat           # Windows: rebuild images after update
+├── launch.sh                        # Linux/WSL2: start all services in tmux
+├── cassiopeia.ico                   # Application icon
 ├── pyproject.toml
 └── .env.example                     # All configurable env vars
 ```
