@@ -60,12 +60,25 @@ fi
 API_PORT="${API_PORT:-8000}"
 CHAINLIT_PORT="${CHAINLIT_PORT:-8001}"
 
+# ── Port conflict check ───────────────────────────────────────────────────────
+for _port in "$API_PORT" "$CHAINLIT_PORT"; do
+    if ss -tlnH "sport = :$_port" 2>/dev/null | grep -q .; then
+        echo "ERROR: port $_port is already in use."
+        echo "  If the Docker stack is running: docker compose down"
+        echo "  Or set a different port: API_PORT=8080 ./launch.sh"
+        exit 1
+    fi
+done
+
+# ── Pre-load embedding model ─────────────────────────────────────────────────
+cassiopeia-preload || echo "WARNING: could not pre-load embedding model — will retry at startup."
+
 # ── Create session (detached) ────────────────────────────────────────────────
 tmux new-session -d -s "$SESSION" -x 220 -y 50
 
 # Window 0 — API server
 tmux rename-window -t "$SESSION:0" "api"
-tmux send-keys -t "$SESSION:0" "cd '$SCRIPT_DIR' && uvicorn api_server:app --port $API_PORT --reload" Enter
+tmux send-keys -t "$SESSION:0" "cd '$SCRIPT_DIR' && uvicorn api_server:app --port $API_PORT" Enter
 
 # Window 1 — Chainlit chat
 tmux new-window -t "$SESSION" -n "chat"

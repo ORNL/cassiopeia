@@ -13,8 +13,7 @@ This Academy agent is the sole writer to ChromaDB.  It:
 - Finds papers similar to a user-supplied anchor DOI or title
 
 Provider / model is controlled by ``LLM_CHAT_MODEL`` (LiteLLM convention).
-The embedding model is controlled by ``EMBEDDING_MODEL``
-(default: ``all-MiniLM-L6-v2``).
+Embeddings use ``all-MiniLM-L6-v2`` via ChromaDB's built-in ONNX runtime.
 """
 
 from __future__ import annotations
@@ -35,6 +34,7 @@ from academy.agent import Agent, action
 
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
+from utils.source_fetchers import _session as _aiohttp_session
 
 logger = logging.getLogger(__name__)
 
@@ -155,16 +155,14 @@ class RAGAgent(Agent):
         self,
         db_path: str | None = None,
         rag_persist_dir: str | None = None,
-        embedding_model: str | None = None,
     ) -> None:
         super().__init__()
 
         _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
         _rag_dir = rag_persist_dir or os.environ.get("RAG_PERSIST_DIR") or str(Path(__file__).parent.parent / "chroma_db")
-        _emb = embedding_model or os.environ.get("EMBEDDING_MODEL") or "all-MiniLM-L6-v2"
 
         self._store = PaperStore(_db)
-        self._rag = RAGStore(persist_dir=_rag_dir, embedding_model=_emb)
+        self._rag = RAGStore(persist_dir=_rag_dir)
         self._chat_model = os.environ.get(
             "LLM_CHAT_MODEL", "anthropic/claude-sonnet-4-6"
         )
@@ -554,7 +552,7 @@ class RAGAgent(Agent):
             "resultType": "core",
         }
         try:
-            async with aiohttp.ClientSession() as session:
+            async with _aiohttp_session() as session:
                 async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                     if resp.status != 200:
                         return ""
@@ -587,7 +585,7 @@ class RAGAgent(Agent):
         return {
             "papers_in_chromadb": self._rag.count(),
             "papers_pending_indexing": len(unindexed),
-            "embedding_model": os.environ.get("EMBEDDING_MODEL", "all-MiniLM-L6-v2"),
+            "embedding_model": "all-MiniLM-L6-v2 (ONNX)",
             "chat_model": self._chat_model,
         }
 

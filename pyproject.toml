@@ -20,9 +20,11 @@ dependencies = [
     "langchain-core>=0.3",
     "langgraph>=0.2",
     "langchain-community>=0.3",
-    "chromadb>=0.4",
-    "sentence-transformers>=2.2",
+    "chromadb[default]>=0.4",
 ]
+
+[project.scripts]
+cassiopeia-preload = "utils.rag_store:preload_embedding_model"
 
 [project.optional-dependencies]
 dev = [

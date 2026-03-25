@@ -1,0 +1,37 @@
+# Python artefacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Runtime data
+*.db
+*.db-shm
+*.db-wal
+chroma.sqlite3
+chroma_db/
+.chainlit/
+chainlit.md
+.files/
+
+# UUID-named ChromaDB HNSW segment directories
+[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]-*
+
+# Secrets
+.env
+
+# Frontend (has its own build context)
+frontend/
+
+# Docs and scripts not needed at runtime
+README.md
+INSTALL.md
+ROADMAP.md
+CASSIOPEIA_HOW_IT_WORKS.md
+*.sh
+*.ps1
+*.bat
+Dockerfile
+docker-compose.yml
+.dockerignore

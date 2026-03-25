@@ -26,11 +26,28 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any
 
+import os
+
 import aiohttp
 
 from models.schemas import PaperMetadata, SearchQuery, SourceType
 
 logger = logging.getLogger(__name__)
+
+# Set DISABLE_SSL_VERIFY=true in the environment to bypass SSL certificate
+# verification — required when a corporate proxy intercepts HTTPS traffic
+# with a self-signed certificate (e.g. inside Docker on an ORNL network).
+_SSL_VERIFY = os.environ.get("DISABLE_SSL_VERIFY", "").lower() not in ("1", "true", "yes")
+
+if not _SSL_VERIFY:
+    logger.warning("SSL certificate verification is DISABLED (DISABLE_SSL_VERIFY=true).")
+
+
+def _session(**kwargs) -> aiohttp.ClientSession:
+    """Return an aiohttp ClientSession with the correct SSL settings."""
+    if not _SSL_VERIFY:
+        kwargs.setdefault("connector", aiohttp.TCPConnector(ssl=False))
+    return aiohttp.ClientSession(**kwargs)
 
 
 # ─────────────────────────────────────────────────────
@@ -113,7 +130,7 @@ class _EuropePMCFetcher(BaseFetcher):
         )
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with _session() as session:
                 async with session.get(
                     self.BASE_URL,
                     params=params,
@@ -143,7 +160,7 @@ class _EuropePMCFetcher(BaseFetcher):
             f"PMC/{numeric_id}/fullTextXML"
         )
         try:
-            async with aiohttp.ClientSession() as session:
+            async with _session() as session:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:
@@ -309,7 +326,7 @@ class ArxivFetcher(BaseFetcher):
 
         for attempt in range(2):
             try:
-                async with aiohttp.ClientSession() as session:
+                async with _session() as session:
                     async with session.get(
                         self.BASE_URL,
                         params=params,
@@ -342,7 +359,7 @@ class ArxivFetcher(BaseFetcher):
         base_id = paper_id.split("v")[0] if "v" in paper_id else paper_id
         url = f"https://arxiv.org/html/{base_id}"
         try:
-            async with aiohttp.ClientSession() as session:
+            async with _session() as session:
                 async with session.get(
                     url, timeout=aiohttp.ClientTimeout(total=30)
                 ) as resp:

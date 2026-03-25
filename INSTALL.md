@@ -38,20 +38,34 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt install -y nodejs
 ```
 
-### Windows (WSL 2 — recommended)
+### Windows
 
-Cassiopeia uses tmux and a bash launcher, so **WSL 2** (Windows Subsystem for Linux) is the recommended environment on Windows. Once WSL 2 is set up with Ubuntu, follow the Linux instructions above.
+#### Option A — WSL 2
 
-To install WSL 2:
+WSL 2 gives you a full Linux environment and lets you use `launch.sh` normally.
 
 ```powershell
 # Run in PowerShell as Administrator
 wsl --install
 ```
 
-Reboot when prompted, then open the Ubuntu terminal and run the Linux steps.
+Reboot when prompted, open the Ubuntu terminal, and follow the Linux instructions above.
 
-> **Native Windows (without WSL)** is not supported by `launch.sh`. You can still start each service manually — see the *Running without tmux* section below.
+#### Option B — Docker Compose (recommended for native Windows)
+
+Docker runs the services in Linux containers, sidestepping all Windows compatibility issues. Install [Docker Desktop](https://www.docker.com/products/docker-desktop/) first, then right-click `cassiopeia-install.bat` and choose **Run as administrator**.
+
+The installer will:
+
+1. Verify Docker is running
+2. Create `.env` from `.env.example` and open it for editing
+3. Build the Docker images (several minutes on first run; subsequent builds are fast)
+4. Place **Start Cassiopeia** and **Stop Cassiopeia** shortcuts on the desktop for all users
+
+After installation, double-click **Start Cassiopeia** — the dashboard opens in your browser automatically. Use **Stop Cassiopeia** (or `cassiopeia-stop.bat`) to shut everything down.
+
+> **Note:** Cassiopeia depends on `academy-py`, which uses the Unix-only `fcntl` module
+> and does not run natively on Windows outside of Docker or WSL 2.
 
 ---
 

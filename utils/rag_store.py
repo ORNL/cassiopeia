@@ -11,11 +11,24 @@ from typing import Any
 
 import chromadb
 from chromadb.config import Settings
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
 
 _DEFAULT_PERSIST = Path(__file__).parent.parent / "chroma_db"
-_DEFAULT_MODEL = "all-MiniLM-L6-v2"
+
+
+def preload_embedding_model() -> None:
+    """Download the ONNX embedding model if it is not already cached.
+
+    Called by the ``cassiopeia-preload`` console script (see pyproject.toml)
+    and by the Docker build step so the model is available without a network
+    connection at runtime.
+    """
+    import sys
+    print("Checking embedding model cache…", flush=True)
+    DefaultEmbeddingFunction()
+    print("Embedding model ready.", flush=True)
+    sys.exit(0)
 
 
 class RAGStore:
@@ -24,7 +37,6 @@ class RAGStore:
     def __init__(
         self,
         persist_dir: str | Path = _DEFAULT_PERSIST,
-        embedding_model: str = _DEFAULT_MODEL,
         collection_name: str = "papers",
     ) -> None:
         persist_dir = Path(persist_dir)
@@ -34,7 +46,7 @@ class RAGStore:
             path=str(persist_dir),
             settings=Settings(anonymized_telemetry=False),
         )
-        self._ef = SentenceTransformerEmbeddingFunction(model_name=embedding_model)
+        self._ef = DefaultEmbeddingFunction()  # all-MiniLM-L6-v2 via ONNX (no PyTorch needed)
         self._col = self._client.get_or_create_collection(
             name=collection_name,
             embedding_function=self._ef,
