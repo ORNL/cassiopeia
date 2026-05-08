@@ -180,89 +180,6 @@ SourceSelector.propTypes = {
   onChange: PropTypes.func.isRequired,
 };
 
-function priorityColor(v) {
-  if (v > 0.7) return "#4ade80";
-  if (v > 0.4) return "#fbbf24";
-  return "#94a3b8";
-}
-
-function Slider({ label, value, onChange, description }) {
-  const c = priorityColor(value);
-  return (
-    <div style={{ marginBottom: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
-        <div style={S.sliderLabel}>{label}</div>
-        <span style={{ ...S.sliderVal, color: c }}>{(value * 100).toFixed(0)}%</span>
-      </div>
-      {description && <p style={S.sliderDesc}>{description}</p>}
-      <input type="range" min="0" max="100" value={value * 100}
-        onChange={(e) => onChange(Number(e.target.value) / 100)}
-        style={{ ...S.range, accentColor: c }}
-      />
-    </div>
-  );
-}
-
-Slider.propTypes = {
-  label: PropTypes.string.isRequired,
-  value: PropTypes.number.isRequired,
-  onChange: PropTypes.func.isRequired,
-  description: PropTypes.string,
-};
-
-function ServerQueryPreview({ species, stresses, keywords, timeRange }) {
-  const [queries, setQueries] = useState([]);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (!species.length && !stresses.length) { setQueries([]); return; }
-    const t = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const res = await fetch("/api/preview_queries", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ plant_species: species, stress_types: stresses, expertise_keywords: keywords, time_range_months: timeRange }),
-        });
-        if (res.ok) setQueries(await res.json());
-      } catch { /* silent */ } finally { setLoading(false); }
-    }, 600);
-    return () => clearTimeout(t);
-  }, [species, stresses, keywords, timeRange]);
-
-  if (!species.length && !stresses.length) return null;
-
-  return (
-    <div style={S.qPrev}>
-      <div style={S.qHead}>
-        <span style={{ fontSize: 16 }}>⚡</span>
-        <span style={S.qTitle}>Live Query Preview</span>
-        {loading && <span style={{ fontSize: 11, color: "#64748b" }}>updating…</span>}
-        <span style={S.qBadge}>{queries.length} queries</span>
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {queries.map((q) => (
-          <div key={q.query + q.source} style={S.qItem}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
-              <span style={{ ...S.qType, background: q.access_type === "open" ? "#16312b" : "#312e16", color: q.access_type === "open" ? "#4ade80" : "#fbbf24" }}>
-                {q.access_type === "open" ? "full-text" : "abstract"}
-              </span>
-              <span style={{ fontSize: 10, color: "#4b5563" }}>→ {q.source}</span>
-            </div>
-            <code style={S.qCode}>{q.query}</code>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-ServerQueryPreview.propTypes = {
-  species: PropTypes.array.isRequired,
-  stresses: PropTypes.array.isRequired,
-  keywords: PropTypes.array.isRequired,
-  timeRange: PropTypes.number.isRequired,
-};
 
 function PaperCard({ paper, expanded, onToggle, isNew }) {
   const bw = (v) => `${Math.max(v * 100, 2)}%`;
@@ -389,6 +306,24 @@ function FeasibilityDetail({ f }) {
   );
 }
 
+function verifyBorderColor(supported) {
+  if (supported === true)  return "#1a4a2a";
+  if (supported === false) return "#4a1a1a";
+  return "#334155";
+}
+
+function verifyTextColor(supported) {
+  if (supported === true)  return "#4ade80";
+  if (supported === false) return "#f87171";
+  return "#64748b";
+}
+
+function verifyLabel(supported) {
+  if (supported === true)  return "✓ Supported";
+  if (supported === false) return "✗ Unsupported";
+  return "? Failed";
+}
+
 function VerificationPanel({ v }) {
   const [expanded, setExpanded] = useState(false);
   if (!v) return null;
@@ -412,11 +347,11 @@ function VerificationPanel({ v }) {
       </div>
       {expanded && v.details && v.details.length > 0 && (
         <div style={S.verifyDetails}>
-          {v.details.map((d, i) => (
-            <div key={i} style={{ ...S.verifyDetail, borderColor: d.supported === true ? "#1a4a2a" : d.supported === false ? "#4a1a1a" : "#334155" }}>
+          {v.details.map((d) => (
+            <div key={`${d.paper_id}-${d.claim}`} style={{ ...S.verifyDetail, borderColor: verifyBorderColor(d.supported) }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: d.supported === true ? "#4ade80" : d.supported === false ? "#f87171" : "#64748b" }}>
-                  {d.supported === true ? "✓ Supported" : d.supported === false ? "✗ Unsupported" : "? Failed"}
+                <span style={{ fontSize: 11, fontWeight: 700, color: verifyTextColor(d.supported) }}>
+                  {verifyLabel(d.supported)}
                 </span>
                 <span style={{ fontSize: 10, color: "#475569" }}>{d.paper_id ? d.paper_id.slice(0, 8) : ""}</span>
                 {d.confidence != null && (
@@ -543,19 +478,13 @@ CombosTab.propTypes = { ragCombos: PropTypes.array, combos: PropTypes.array, rat
 // Main Dashboard
 // ─────────────────────────────────────────────────
 
-export default function Dashboard({ onBack, researcherName, researcherId }) {
-  const [name, setName] = useState(researcherName || "Researcher");
+export default function Dashboard({ onBack, researcherName, researcherId, priorities, onOpenSettings }) {
   const [species, setSpecies] = useState(["poplar", "arabidopsis"]);
   const [stresses, setStresses] = useState(["drought", "nutrient"]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
   const [researchPrompt, setResearchPrompt] = useState("");
   const [sources, setSources] = useState(["biorxiv", "pubmed", "plos_one", "frontiers", "plant_physiology"]);
   const [timeRange, setTimeRange] = useState(12);
-
-  const [prioNovelty, setPrioNovelty] = useState(0.7);
-  const [prioRelevance, setPrioRelevance] = useState(0.8);
-  const [prioMethodology, setPrioMethodology] = useState(0.5);
-  const [prioReprod, setPrioReprod] = useState(0.6);
 
   const [tab, setTab] = useState(() => {
     const p = new URLSearchParams(globalThis.location.search).get("tab");
@@ -684,15 +613,15 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           researcher_id: RESEARCHER_ID,
-          name,
+          name: researcherName || "Researcher",
           plant_species: species,
           stress_types: stresses,
           phenotyping_methods: methods,
           expertise_keywords: extractedKeywords,
-          priority_novelty: prioNovelty,
-          priority_relevance: prioRelevance,
-          priority_methodology: prioMethodology,
-          priority_reproducibility: prioReprod,
+          priority_novelty: priorities.novelty,
+          priority_relevance: priorities.relevance,
+          priority_methodology: priorities.methodology,
+          priority_reproducibility: priorities.reproducibility,
           time_range_months: timeRange,
           source_targets: sources,
           limit: 20,
@@ -715,7 +644,7 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
     } finally {
       setSearching(false);
     }
-  }, [name, species, stresses, researchPrompt, extractedKeywords, prioNovelty, prioRelevance, prioMethodology, prioReprod, timeRange, sources]);
+  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources]);
 
   const filtered = useMemo(() => {
     let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
@@ -771,6 +700,7 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
                 {researcherName}
               </span>
             )}
+            <button style={S.cogBtn} onClick={onOpenSettings} title="Priority settings">⚙</button>
             <div style={S.hStatus}>
               <div style={{ ...S.hDot, background: isAgentReady ? "#4ade80" : "#f59e0b", boxShadow: isAgentReady ? "0 0 8px #4ade8066" : "0 0 8px #f59e0b66" }} />
               <span style={S.hTxt}>{statusText}</span>
@@ -796,26 +726,21 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
         {/* ═══ PROFILE ═══ */}
         {tab === "profile" && (
           <div>
-            <div style={S.grid2}>
-              <div>
-                <div style={S.card}>
-                  <h3 style={S.cardH}>Research Focus</h3>
-                  <div style={{ marginBottom: 20 }}>
-                    <div style={S.label}>Researcher Name</div>
-                    <input value={name} onChange={(e) => setName(e.target.value)} style={S.input} placeholder="Your name" />
-                  </div>
+            {/* Research Focus — full-width card, two-column interior */}
+            <div style={S.card}>
+              <h3 style={S.cardH}>Research Focus</h3>
+              <div style={S.grid2}>
+                <div>
                   <SpeciesSelect selected={species} onChange={setSpecies} />
                   <ChipSelect label="Stress Types" options={STRESS_TYPES} selected={stresses} onChange={setStresses} renderOption={(o) => `${o.icon} ${o.label}`} />
                 </div>
-
-                <div style={S.card}>
-                  <h3 style={S.cardH}>Research Interest</h3>
-                  <p style={S.cardSub}>Describe your research focus in natural language. Keywords are extracted by the LLM when you finish typing and used to refine both scoring and queries.</p>
+                <div>
+                  <p style={{ ...S.cardSub, marginTop: 0 }}>Describe your research focus in natural language. Keywords are extracted by the LLM when you finish typing and used to refine both scoring and queries.</p>
                   <div style={{ position: "relative" }}>
                     <textarea value={researchPrompt}
                       onChange={(e) => { setResearchPrompt(e.target.value); setExtractedKeywords([]); }}
                       onBlur={doExtractKeywords}
-                      style={S.textarea} rows={6}
+                      style={S.textarea} rows={8}
                       placeholder="e.g. I want to explore how drought-induced changes in poplar root architecture relate to above-ground spectral signatures..."
                     />
                     <span style={S.charCt}>{researchPrompt.length} chars</span>
@@ -836,31 +761,20 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
                     </div>
                   )}
                 </div>
-
               </div>
+            </div>
 
-              <div>
-                <div style={S.card}>
-                  <h3 style={S.cardH}>Priority Weights</h3>
-                  <p style={S.cardSub}>Adjust how papers are ranked relative to your interests</p>
-                  <Slider label="Novelty" value={prioNovelty} onChange={setPrioNovelty} description="Prefer unique, unexplored approaches" />
-                  <Slider label="Relevance" value={prioRelevance} onChange={setPrioRelevance} description="Match to your species and stress focus" />
-                  <Slider label="Methodology" value={prioMethodology} onChange={setPrioMethodology} description="Alignment with your phenotyping methods" />
-                  <Slider label="Reproducibility" value={prioReprod} onChange={setPrioReprod} description="Evidence quality and source credibility" />
+            {/* Article Sources — full-width card with matching header style */}
+            <div style={S.card}>
+              <h3 style={S.cardH}>Article Sources</h3>
+              <p style={S.cardSub}>Choose which databases to search and set the publication date range</p>
+              <SourceSelector selected={sources} onChange={setSources} />
+              <div style={{ marginTop: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ ...S.label, marginBottom: 0 }}>Search Time Range</div>
+                  <span style={S.sliderVal}>{timeRangeLabel}</span>
                 </div>
-
-                <div style={S.card}>
-                  <SourceSelector selected={sources} onChange={setSources} />
-                  <div style={{ marginTop: 16 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                      <div style={{ ...S.label, marginBottom: 0 }}>Search Time Range</div>
-                      <span style={S.sliderVal}>
-                        {timeRangeLabel}
-                      </span>
-                    </div>
-                    <input type="range" min="3" max="120" step="3" value={timeRange} onChange={(e) => setTimeRange(Number(e.target.value))} style={{ ...S.range, marginTop: 8, width: "100%" }} />
-                  </div>
-                </div>
+                <input type="range" min="3" max="120" step="3" value={timeRange} onChange={(e) => setTimeRange(Number(e.target.value))} style={{ ...S.range, marginTop: 8, width: "100%" }} />
               </div>
             </div>
 
@@ -892,8 +806,6 @@ export default function Dashboard({ onBack, researcherName, researcherId }) {
                 </div>
               )}
             </div>
-
-            <ServerQueryPreview species={species} stresses={stresses} keywords={extractedKeywords} timeRange={timeRange} />
 
             {/* Session history */}
             {sessions.length > 0 && (
@@ -1121,6 +1033,7 @@ const S = {
   empty: { textAlign: "center", padding: "60px 24px" },
   footer: { textAlign: "center", padding: "16px 24px", fontSize: 11, color: "#334155", borderTop: "1px solid #1e293b" },
   backBtn: { background: "none", border: "1px solid #334155", color: "#64748b", borderRadius: 8, padding: "6px 12px", fontSize: 16, cursor: "pointer", lineHeight: 1 },
+  cogBtn: { background: "none", border: "1px solid #334155", borderRadius: 8, color: "#94a3b8", fontSize: 16, padding: "4px 10px", cursor: "pointer", lineHeight: 1 },
 
   themeHeader: { fontSize: 11, fontWeight: 700, color: "#22d3ee", textTransform: "uppercase", letterSpacing: "0.08em", padding: "10px 0 6px", borderBottom: "1px solid #0e2a4a", marginBottom: 12 },
   themeChip: { fontSize: 10, fontWeight: 700, color: "#22d3ee", background: "#0c1f2d", border: "1px solid #0e3a5e", borderRadius: 10, padding: "2px 10px", whiteSpace: "nowrap" },
@@ -1139,4 +1052,15 @@ const S = {
   verifyDetail: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px", border: "1px solid #334155" },
 };
 
-Dashboard.propTypes = { onBack: PropTypes.func, researcherName: PropTypes.string, researcherId: PropTypes.string };
+Dashboard.propTypes = {
+  onBack: PropTypes.func,
+  researcherName: PropTypes.string,
+  researcherId: PropTypes.string,
+  priorities: PropTypes.shape({
+    novelty: PropTypes.number.isRequired,
+    relevance: PropTypes.number.isRequired,
+    methodology: PropTypes.number.isRequired,
+    reproducibility: PropTypes.number.isRequired,
+  }).isRequired,
+  onOpenSettings: PropTypes.func.isRequired,
+};
