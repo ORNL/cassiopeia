@@ -876,6 +876,28 @@ def _format_paper_rich(p: dict) -> str:
     )
 
 
+def _format_insights(raw_insights: list) -> str:
+    if not raw_insights:
+        return ""
+    parts = []
+    for ki in raw_insights:
+        label = ki.get("paper_id") or ki.get("paper") or ""
+        prefix = label[:8] + " " if label else ""
+        parts.append(f"{prefix}*{ki.get('insight', '')}*")
+    return "\n  **Key insights:** " + " · ".join(parts)
+
+
+def _format_verification(v: dict | None) -> str:
+    if v is None:
+        return ""
+    total = v.get("supported", 0) + v.get("unsupported", 0)
+    if v.get("flagged"):
+        return f"\n  ⚠ *Verification concern — {v.get('unsupported', 0)}/{total} claims unsupported*"
+    if total > 0:
+        return f"\n  ✓ *{v.get('supported', 0)}/{total} claims verified*"
+    return ""
+
+
 def _format_rag_combo(c: dict) -> str:
     theme = f"**[{c['theme']}]** " if c.get("theme") else ""
     fdata = c.get("feasibility") or {}
@@ -885,7 +907,9 @@ def _format_rag_combo(c: dict) -> str:
     fstr = f" `{ficon}`" if ficon else ""
     warn = f"\n  ⚠ *{c['novelty_warning']}*" if c.get("novelty_warning") else ""
     rationale = f"\n  > {c['rationale']}" if c.get("rationale") else ""
-    return f"- {theme}{c['suggestion']}{fstr}{warn}{rationale}\n"
+    insights_str = _format_insights(c.get("key_insights") or [])
+    verify_str = _format_verification(c.get("verification"))
+    return f"- {theme}{c['suggestion']}{fstr}{warn}{rationale}{insights_str}{verify_str}\n"
 
 
 def _format_per_paper_combo(c: dict) -> str:

@@ -389,6 +389,52 @@ function FeasibilityDetail({ f }) {
   );
 }
 
+function VerificationPanel({ v }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!v) return null;
+
+  const total = v.supported + v.unsupported;
+  const summaryText = total > 0 ? `✓ ${v.supported}/${total} claims verified` : null;
+
+  return (
+    <div style={{ marginTop: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        {v.flagged && (
+          <span style={S.verifyFlag} title="More than 1/3 of checked claims could not be verified against source papers">
+            ⚠ Verification concern
+          </span>
+        )}
+        {summaryText && (
+          <button onClick={() => setExpanded((x) => !x)} style={S.verifyBtn}>
+            {summaryText} {expanded ? "▲" : "▼"}
+          </button>
+        )}
+      </div>
+      {expanded && v.details && v.details.length > 0 && (
+        <div style={S.verifyDetails}>
+          {v.details.map((d, i) => (
+            <div key={i} style={{ ...S.verifyDetail, borderColor: d.supported === true ? "#1a4a2a" : d.supported === false ? "#4a1a1a" : "#334155" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
+                <span style={{ fontSize: 11, fontWeight: 700, color: d.supported === true ? "#4ade80" : d.supported === false ? "#f87171" : "#64748b" }}>
+                  {d.supported === true ? "✓ Supported" : d.supported === false ? "✗ Unsupported" : "? Failed"}
+                </span>
+                <span style={{ fontSize: 10, color: "#475569" }}>{d.paper_id ? d.paper_id.slice(0, 8) : ""}</span>
+                {d.confidence != null && (
+                  <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>{(d.confidence * 100).toFixed(0)}% conf</span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5, marginBottom: 3 }}>{d.claim}</div>
+              {d.reason && <div style={{ fontSize: 11, color: "#64748b", fontStyle: "italic" }}>{d.reason}</div>}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+VerificationPanel.propTypes = { v: PropTypes.object };
+
 function RagComboCard({ c, rating, onRate }) {
   return (
     <div style={S.ragComboCard}>
@@ -415,13 +461,14 @@ function RagComboCard({ c, rating, onRate }) {
         <div style={S.insightBlock}>
           <div style={S.insightTitle}>Key insights</div>
           {c.key_insights.map((ki) => (
-            <div key={ki.paper} style={S.insightRow}>
-              <span style={S.insightPaper}>{ki.paper}</span>
+            <div key={ki.paper_id || ki.paper} style={S.insightRow}>
+              <span style={S.insightPaper}>{ki.paper_id ? ki.paper_id.slice(0, 8) : ki.paper}</span>
               <span style={S.insightText}>{ki.insight}</span>
             </div>
           ))}
         </div>
       )}
+      <VerificationPanel v={c.verification} />
       <FeasibilityDetail f={c.feasibility} />
     </div>
   );
@@ -1085,6 +1132,11 @@ const S = {
   sessionRow: { display: "flex", alignItems: "center", gap: 16, padding: "8px 0", borderBottom: "1px solid #1e293b", flexWrap: "wrap" },
   sessionDate: { fontSize: 12, color: "#64748b", fontVariantNumeric: "tabular-nums", minWidth: 130 },
   sessionMeta: { fontSize: 12, color: "#94a3b8", fontWeight: 600 },
+
+  verifyFlag: { fontSize: 10, fontWeight: 700, color: "#fbbf24", background: "#1a1204", border: "1px solid #7c5a0a", borderRadius: 10, padding: "2px 10px", whiteSpace: "nowrap" },
+  verifyBtn: { fontSize: 10, fontWeight: 600, color: "#64748b", background: "none", border: "1px solid #334155", borderRadius: 10, padding: "2px 10px", cursor: "pointer" },
+  verifyDetails: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 },
+  verifyDetail: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px", border: "1px solid #334155" },
 };
 
 Dashboard.propTypes = { onBack: PropTypes.func, researcherName: PropTypes.string, researcherId: PropTypes.string };

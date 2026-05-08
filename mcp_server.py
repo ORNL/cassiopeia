@@ -215,9 +215,53 @@ async def search_literature(
     """Run a full literature search cycle for a researcher profile.
 
     Returns a ToolResult (code 301) whose ``result`` dict contains:
+
     - ``papers``: top scored papers
     - ``combos``: per-paper hypotheses
-    - ``rag_combos``: cross-paper proposals with feasibility annotations
+    - ``rag_combos``: cross-paper proposals with feasibility and verification
+      annotations. Each proposal has the following shape::
+
+          {
+            "proposal_id": str,
+            "theme": str,
+            "suggestion": str,
+            "rationale": str,          # may contain [paper_id] citation tags
+            "key_insights": [          # one entry per supporting paper
+              {"paper_id": str, "insight": str}
+            ],
+            "supporting_papers": [str],
+            "novelty_warning": str,
+            "feasibility": {...},      # present after assess_feasibility
+            "verification": {          # Augmentation A — always present
+              "checked_claims": int,
+              "supported": int,
+              "unsupported": int,
+              "flagged": bool,         # True iff unsupported/checked > 1/3
+              "details": [
+                {"claim": str, "paper_id": str,
+                 "supported": bool | None, "confidence": float | None,
+                 "reason": str}
+              ]
+            }
+          }
+
+    Each ``rag_combos`` item carries a ``schema_version`` integer so clients
+    can branch without guessing what fields are present:
+
+    ======  ===================================================================
+    v1      Legacy — no longer produced. ``key_insights`` used ``{paper, insight}``.
+            No ``verification`` field.
+    v2      Current. ``key_insights`` is ``[{paper_id, insight}]``.
+            ``verification`` field always present.
+    v3      Reserved for Augmentation D (``critique`` field).
+    ======  ===================================================================
+
+    .. note::
+        ``key_insights`` changed shape in Augmentation A from
+        ``{"paper": str, "insight": str}`` to ``{"paper_id": str, "insight": str}``.
+        Any APPL-Agent tool wrappers or response parsers that read
+        ``key_insights[n]["paper"]`` must be updated to use ``"paper_id"``.
+        Branch on ``schema_version >= 2`` to apply this logic safely.
     """
     if _mining_handle is None or _agent_ctx is None:
         return _not_ready("search_literature")

@@ -81,6 +81,11 @@ class PaperStore:
                 data     TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS verify_cache (
+                cache_key TEXT PRIMARY KEY,
+                data      TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS sessions (
                 session_id    TEXT PRIMARY KEY,
                 researcher_id TEXT NOT NULL,
@@ -309,6 +314,25 @@ class PaperStore:
     def load_llm_cache(self) -> dict[str, dict]:
         rows = self._conn.execute("SELECT paper_id, data FROM llm_cache").fetchall()
         return {row["paper_id"]: json.loads(row["data"]) for row in rows}
+
+    # ------------------------------------------------------------------
+    # Verification cache (Augmentation A)
+    # ------------------------------------------------------------------
+
+    def get_verify_cache(self, cache_key: str) -> dict | None:
+        """Return a cached verification result by (paper_id, insight_hash) key."""
+        row = self._conn.execute(
+            "SELECT data FROM verify_cache WHERE cache_key = ?", (cache_key,)
+        ).fetchone()
+        return json.loads(row["data"]) if row else None
+
+    def set_verify_cache(self, cache_key: str, data: dict) -> None:
+        """Persist a verification result."""
+        self._conn.execute(
+            "INSERT OR REPLACE INTO verify_cache (cache_key, data) VALUES (?, ?)",
+            (cache_key, json.dumps(data)),
+        )
+        self._conn.commit()
 
     # ------------------------------------------------------------------
     # Sessions

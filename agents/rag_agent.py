@@ -18,6 +18,7 @@ Embeddings use ``all-MiniLM-L6-v2`` via ChromaDB's built-in ONNX runtime.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -44,6 +45,13 @@ def _proposal_id(suggestion: str) -> str:
     return hashlib.sha256(suggestion.encode()).hexdigest()[:16]
 
 
+# Bump this when the proposal dict shape changes in a breaking way:
+#   1 — original shape (key_insights: [{paper, insight}], no verification)
+#   2 — Augmentation A (key_insights: [{paper_id, insight}], +verification)
+#   3 — Augmentation D (+critique)  ← increment when D lands
+_PROPOSAL_SCHEMA_VERSION = 2
+
+
 _COMBINATIONS_PROMPT = """\
 You are a plant biology research strategist.
 
@@ -54,10 +62,30 @@ Researcher profile:
   Keywords : {keywords}
 
 {preference_block}\
-Below are abstracts from papers retrieved for this researcher.
+Below are abstracts from papers retrieved for this researcher. Each paper \
+header shows its exact paper_id — use these IDs when citing papers.
 Your task is to identify CROSS-PAPER synergies — novel experiment designs \
 that combine findings, methods, or observations from MULTIPLE papers above.
 Do NOT just paraphrase a single paper.
+
+CITATION RULE — rationale field:
+In "rationale", every factual claim attributed to prior work must be followed \
+by a tag of the form [paper_id] referring to one of the supporting papers. \
+Claims about what the *proposed* experiment would discover or test do NOT need \
+tags — only claims about what is already known. If a claim cannot be tied to a \
+specific paper in the provided set, do not make it.
+
+Example rationale:
+"Cd uptake in Brassica napus is dose-dependent up to 50 µM [P_a3f2], but VNIR \
+red-edge shifts have only been characterised at lower concentrations [P_91bc]. \
+Combining these would test whether reflectance saturates above the linear uptake range."
+
+KEY INSIGHTS RULE:
+"key_insights" must be a list where each entry is a dict with exactly two keys: \
+"paper_id" (the exact ID from the paper header) and "insight" \
+(one sentence stating the specific finding from that paper). There must be \
+exactly one entry per supporting paper, and each insight must be a finding \
+from that specific paper — not a synthesis across papers.
 
 Return a JSON object with a "proposals" array of 4-5 items:
 {{
@@ -65,12 +93,12 @@ Return a JSON object with a "proposals" array of 4-5 items:
     {{
       "theme": "<2-4 word label, e.g. 'root-canopy coupling'>",
       "suggestion": "<one concrete experiment proposal, 1-2 sentences>",
-      "rationale": "<why combining these papers is promising — what gap or opportunity this fills, 1-2 sentences>",
+      "rationale": "<why combining these papers is promising, with [paper_id] tags on factual claims>",
       "key_insights": [
-        {{"paper": "<Paper N title or number>", "insight": "<the specific finding from that paper that motivates this proposal, 1 sentence>"}},
+        {{"paper_id": "<exact paper_id from header>", "insight": "<specific finding from that paper, 1 sentence>"}},
         ...
       ],
-      "supporting_papers": ["<Paper N title or number>", ...]
+      "supporting_papers": ["<exact paper_id from header>", ...]
     }}
   ]
 }}
@@ -226,15 +254,18 @@ class RAGAgent(Agent):
     def _build_context_blocks(self, hits: list[dict]) -> str:
         """Format knowledge-base hits into numbered text blocks for LLM prompts.
 
-        Uses up to 6000 characters per paper — consistent with the text window
-        stored during scoring — covering the abstract and beginning of the
-        methods section for open-access papers enriched with full text.
+        Each block header includes the paper_id so the LLM can use it in
+        [paper_id] citation tags and key_insights entries.
+        Uses up to 6000 characters per paper.
         """
         blocks = []
         for i, hit in enumerate(hits, 1):
-            meta = self._store.get_paper_metadata(hit["paper_id"]) or {}
+            paper_id = hit["paper_id"]
+            meta = self._store.get_paper_metadata(paper_id) or {}
             title = meta.get("title", "Unknown")
-            blocks.append(f"[Paper {i}] {title}\n{hit['document'][:6000]}")
+            blocks.append(
+                f"[Paper {i} | paper_id: {paper_id}] {title}\n{hit['document'][:6000]}"
+            )
         return "\n\n".join(blocks)
 
     @staticmethod
@@ -297,9 +328,14 @@ class RAGAgent(Agent):
                 and to steer the LLM towards unexplored territory.
 
         Returns:
-            List of dicts with keys: ``proposal_id``, ``theme``, ``suggestion``,
-            ``rationale``, ``key_insights``, ``supporting_papers``,
-            ``novelty_warning``.
+            List of proposal dicts. Check ``schema_version`` to know the shape:
+
+            * **v2** (current) — ``proposal_id``, ``theme``, ``suggestion``,
+              ``rationale`` (with ``[paper_id]`` citation tags),
+              ``key_insights`` (list of ``{paper_id, insight}`` dicts),
+              ``supporting_papers``, ``novelty_warning``, ``verification``.
+            * **v1** (legacy, no longer produced) — same minus ``verification``,
+              ``key_insights`` used ``{paper, insight}`` dicts.
         """
         await self.index_new_papers()
 
@@ -321,18 +357,29 @@ class RAGAgent(Agent):
             preference_block=self._build_preference_block(liked_proposals),
         )
 
+        paper_text_by_id = {hit["paper_id"]: hit["document"] for hit in hits}
+
         try:
             proposals = await self._llm_proposals(prompt)
         except Exception as exc:
             logger.warning("synthesize_combinations failed: %s", exc)
             return []
 
-        return await self._enrich_proposals(proposals, researcher_id)
+        enriched = await self._enrich_proposals(proposals, researcher_id)
+
+        # Run verification concurrently across all proposals
+        verifications = await asyncio.gather(
+            *[self._verify_proposal_claims(p, paper_text_by_id) for p in enriched]
+        )
+        for proposal, verification in zip(enriched, verifications):
+            proposal["verification"] = verification
+
+        return enriched
 
     async def _enrich_proposals(
         self, proposals: list[dict], researcher_id: str
     ) -> list[dict[str, Any]]:
-        """Attach proposal_id, theme, and novelty_warning to raw LLM proposals."""
+        """Attach proposal_id, schema_version, theme, and novelty_warning to raw LLM proposals."""
         results = []
         for p in proposals:
             suggestion = p.get("suggestion", "")
@@ -341,6 +388,7 @@ class RAGAgent(Agent):
             is_novel, novelty_warning = await self._check_novelty(suggestion, researcher_id)
             results.append(
                 {
+                    "schema_version": _PROPOSAL_SCHEMA_VERSION,
                     "proposal_id": _proposal_id(suggestion),
                     "theme": (p.get("theme") or "")[:40],
                     "suggestion": suggestion,
@@ -351,6 +399,81 @@ class RAGAgent(Agent):
                 }
             )
         return results
+
+    async def _verify_one_claim(
+        self,
+        paper_id: str,
+        insight: str,
+        paper_text: str,
+    ) -> dict:
+        """Verify one key_insight against its source paper, with SQLite caching.
+
+        Cache key: "{paper_id}::{sha256(insight)}" — unique per (paper, insight) pair.
+        On cache hit the LLM is not called. On failure returns a null entry that
+        does not count toward the flagging threshold.
+        """
+        from utils.llm_verifier import verify_claim
+
+        insight_hash = hashlib.sha256(insight.encode()).hexdigest()
+        cache_key = f"{paper_id}::{insight_hash}"
+
+        cached = self._store.get_verify_cache(cache_key)
+        if cached is not None:
+            return {"claim": insight, "paper_id": paper_id, **cached}
+
+        result = await verify_claim(paper_text, insight)
+        self._store.set_verify_cache(cache_key, result)
+        return {"claim": insight, "paper_id": paper_id, **result}
+
+    async def _verify_proposal_claims(
+        self,
+        proposal: dict,
+        paper_text_by_id: dict[str, str],
+    ) -> dict:
+        """Verify each key_insight against its source paper concurrently.
+
+        Returns the verification dict to attach to the proposal. Null entries
+        (infrastructure failures) are excluded from the flagging ratio so they
+        do not look like hallucinations.
+
+        Reusable from Augmentation D.
+        """
+        key_insights = proposal.get("key_insights", [])
+        if not key_insights:
+            return {
+                "checked_claims": 0,
+                "supported": 0,
+                "unsupported": 0,
+                "flagged": False,
+                "details": [],
+            }
+
+        tasks = [
+            self._verify_one_claim(
+                ki.get("paper_id", ""),
+                ki.get("insight", ""),
+                paper_text_by_id.get(ki.get("paper_id", ""), ""),
+            )
+            for ki in key_insights
+        ]
+        details = list(await asyncio.gather(*tasks))
+
+        supported_count = sum(1 for d in details if d["supported"] is True)
+        unsupported_count = sum(1 for d in details if d["supported"] is False)
+        checked_claims = supported_count + unsupported_count
+        flagged = (
+            (unsupported_count / max(1, checked_claims)) > (1 / 3)
+            if checked_claims > 0
+            else False
+        )
+
+        return {
+            "checked_claims": checked_claims,
+            "supported": supported_count,
+            "unsupported": unsupported_count,
+            "flagged": flagged,
+            "details": details,
+        }
 
     async def _check_novelty(
         self, suggestion: str, researcher_id: str
