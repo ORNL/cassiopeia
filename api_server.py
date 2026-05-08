@@ -23,6 +23,7 @@ import asyncio
 import contextvars
 import logging
 import os
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
@@ -58,6 +59,29 @@ _mining_handle = None
 _rag_handle = None
 _agent_ctx: contextvars.Context | None = None
 _paper_store: PaperStore | None = None
+
+# Per-researcher progress state — updated synchronously by the search handler.
+# Lightweight in-memory store; resets on server restart.
+_search_progress: dict[str, dict] = {}
+
+
+def _set_progress(
+    researcher_id: str,
+    stage: str,
+    detail: str,
+    pct: int,
+    *,
+    done: bool = False,
+    error: str | None = None,
+) -> None:
+    _search_progress[researcher_id] = {
+        "stage": stage,
+        "detail": detail,
+        "pct": pct,
+        "done": done,
+        "error": error,
+        "ts": time.time(),
+    }
 
 
 def _call(coro: Awaitable[T]) -> asyncio.Future[T]:
@@ -150,6 +174,7 @@ class SearchRequest(BaseModel):
     source_targets: list[str] = []
     limit: int = 20
     with_critique: bool = False
+    max_iterations: int = 3
 
 
 class SynthesizeRequest(BaseModel):
@@ -198,7 +223,7 @@ async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
     """Extract search-relevant keywords from a free-text research description."""
     if not req.text.strip():
         return {"keywords": []}
-    model = os.environ.get("LLM_CHAT_MODEL", "anthropic/claude-sonnet-4-6")
+    model = os.environ["LLM_CHAT_MODEL"]
     try:
         import litellm, json as _json
         response = await litellm.acompletion(
@@ -250,14 +275,29 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
     """Index papers, synthesise proposals (optionally with critique), and assess feasibility."""
     rag_combos: list = []
     try:
+        _set_progress(req.researcher_id, "indexing", "Indexing papers into knowledge base…", 52)
+        await asyncio.sleep(0)
         logger.info("Indexing papers into ChromaDB…")
         await _call(_rag_handle.index_new_papers())
 
         liked: list[dict] = (
             _paper_store.get_liked_proposals(req.researcher_id) if _paper_store else []
         )
+
+        if req.max_iterations > 0:
+            plural = "s" if req.max_iterations != 1 else ""
+            iter_note = f"up to {req.max_iterations} iteration{plural}"
+        else:
+            iter_note = "single-shot"
+        critique_note = " + critique" if req.with_critique else ""
+        _set_progress(
+            req.researcher_id, "synthesizing",
+            f"Synthesising cross-paper proposals ({iter_note}{critique_note})…", 62,
+        )
+        await asyncio.sleep(0)
         logger.info(
-            "Synthesizing RAG proposals (with_critique=%s)…", req.with_critique
+            "Synthesizing RAG proposals (with_critique=%s, max_iterations=%d)…",
+            req.with_critique, req.max_iterations,
         )
         rag_combos = await _call(
             _rag_handle.synthesize_combinations(
@@ -269,9 +309,12 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
                 liked_proposals=liked or None,
                 with_critique=req.with_critique,
                 instruments=equipment,
+                max_iterations=req.max_iterations,
             )
         )
         if rag_combos and equipment:
+            _set_progress(req.researcher_id, "feasibility", "Assessing equipment feasibility…", 90)
+            await asyncio.sleep(0)
             rag_combos = await _call(
                 _rag_handle.assess_feasibility(
                     proposals=rag_combos,
@@ -317,6 +360,15 @@ def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
     return result
 
 
+@app.get("/api/search/progress/{researcher_id}")
+async def search_progress(researcher_id: str) -> dict[str, Any]:
+    """Return the current search progress for a researcher (polled by the frontend modal)."""
+    return _search_progress.get(
+        researcher_id,
+        {"stage": "idle", "detail": "", "pct": 0, "done": False, "error": None, "ts": 0},
+    )
+
+
 @app.post("/api/search", responses={503: {"description": "Mining agent not ready"}})
 async def search(req: SearchRequest) -> dict[str, Any]:
     if _mining_handle is None or _agent_ctx is None:
@@ -328,6 +380,8 @@ async def search(req: SearchRequest) -> dict[str, Any]:
     )
     equipment = _facility_equipment()
 
+    _set_progress(req.researcher_id, "registering", "Registering researcher profile…", 5)
+    await asyncio.sleep(0)  # yield — let queued GET polls see this stage
     await _call(_mining_handle.register_researcher(
         researcher_id=req.researcher_id,
         name=req.name,
@@ -344,8 +398,14 @@ async def search(req: SearchRequest) -> dict[str, Any]:
         source_targets=req.source_targets,
     ))
 
+    n_sources = len(req.source_targets) if req.source_targets else "all"
+    _set_progress(req.researcher_id, "searching", f"Querying {n_sources} source(s) and scoring papers…", 12)
+    await asyncio.sleep(0)  # yield before the long trigger_search
     logger.info("Triggering search…")
     search_result = await _call(_mining_handle.trigger_search(req.researcher_id))
+
+    _set_progress(req.researcher_id, "fetching", "Selecting top-ranked papers…", 42)
+    await asyncio.sleep(0)
     logger.info("Search done: %s — fetching top papers…", search_result)
     papers = await _call(_mining_handle.get_top_papers(req.researcher_id, limit=req.limit))
     logger.info("Got %d papers — fetching combinations…", len(papers))
@@ -372,6 +432,12 @@ async def search(req: SearchRequest) -> dict[str, Any]:
             n_proposals=len(rag_combos) + len(combos),
         )
 
+    n_props = len(rag_combos) + len(combos)
+    _set_progress(
+        req.researcher_id, "done",
+        f"Scan complete — {len(papers)} papers · {n_props} proposals",
+        100, done=True,
+    )
     return {
         "search_result": search_result,
         "papers": papers,

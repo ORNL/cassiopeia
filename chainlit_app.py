@@ -41,7 +41,7 @@ load_dotenv(Path(__file__).parent / ".env")
 litellm.suppress_debug_info = True
 litellm.drop_params = True
 
-_MODEL = os.environ.get("LLM_CHAT_MODEL", "anthropic/claude-sonnet-4-6")
+_MODEL = os.environ["LLM_CHAT_MODEL"]
 _API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
 _DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5173")
 

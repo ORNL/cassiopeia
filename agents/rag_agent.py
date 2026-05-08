@@ -246,9 +246,7 @@ class RAGAgent(Agent):
 
         self._store = PaperStore(_db)
         self._rag = RAGStore(persist_dir=_rag_dir)
-        self._chat_model = os.environ.get(
-            "LLM_CHAT_MODEL", "anthropic/claude-sonnet-4-6"
-        )
+        self._chat_model = os.environ["LLM_CHAT_MODEL"]
 
         logger.info(
             "RAGAgent ready — %d papers already in ChromaDB",
@@ -343,7 +341,7 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             model=self._chat_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=1400,
+            max_tokens=2500,
             response_format={"type": "json_object"},
             temperature=0.4,
         )
@@ -374,8 +372,8 @@ class RAGAgent(Agent):
         3. Sends them **all together** in a single LLM call, asking for novel
            multi-paper experiment proposals that combine findings across papers
         4. Checks each proposal for novelty against already-liked proposals
-        5. Verifies key_insights against source abstracts (Augmentation A)
-        6. Optionally runs a critic pass over each proposal (Augmentation D)
+        5. Verifies key_insights against source abstracts
+        6. Optionally runs a critic pass over each proposal
 
         Args:
             researcher_id: Researcher to scope results to.
@@ -390,9 +388,9 @@ class RAGAgent(Agent):
                 before returning. Default False — existing callers are unaffected.
             instruments: Available facility instruments, forwarded to the critic
                 for feasibility_concerns assessment. Only used when with_critique=True.
-            max_iterations: Number of propose → identify_gaps → retrieve iterations
-                (Augmentation C). ``0`` reverts to the pre-C single-shot behavior
-                (one Sonnet call, no gap-finding loop). Default: ``_MAX_ITERATIONS`` (3).
+            max_iterations: Number of propose → identify_gaps → retrieve iterations. 
+                ``0`` reverts to the pre-C single-shot behavior (one LLM_CHAT_MODEL
+                call, no gap-finding loop). Default: ``_MAX_ITERATIONS`` (3).
 
         Returns:
             List of proposal dicts. Check ``schema_version`` to know the shape:
@@ -597,7 +595,7 @@ class RAGAgent(Agent):
     ) -> list[dict[str, Any]]:
         """Annotate proposals with structured critique from a critic LLM (Augmentation D).
 
-        One Sonnet call per proposal, run concurrently via ``asyncio.gather``.
+        One LLM_CHAT_MODEL call per proposal, run concurrently via ``asyncio.gather``.
         Each proposal is annotated with a ``critique`` dict covering:
 
         - ``novelty`` — is the experiment genuinely novel, with a semantic search
@@ -615,7 +613,7 @@ class RAGAgent(Agent):
 
         Args:
             proposals: List of proposal dicts from ``synthesize_combinations``.
-                Should already have ``verification`` attached (Augmentation A).
+                Should already have ``verification`` attached.
             instruments: Available facility instruments for feasibility assessment.
         """
         _instruments = instruments or []
@@ -659,7 +657,7 @@ class RAGAgent(Agent):
         return "\n\n".join(blocks)
 
     async def _propose_node(self, state: dict) -> dict:
-        """Propose step: one Sonnet call to generate or refine draft proposals."""
+        """Propose step: one LLM_CHAT_MODEL call to generate or refine draft proposals."""
         profile = state["profile"]
         all_papers = state["initial_papers"] + state["additional_papers"]
         context = self._build_context_from_papers(all_papers)
@@ -691,7 +689,7 @@ class RAGAgent(Agent):
         return {**state, "draft_proposals": proposals, "iteration": state["iteration"] + 1}
 
     async def _identify_gaps_node(self, state: dict) -> dict:
-        """Gap identification step: one Haiku call to find evidence gaps in draft proposals."""
+        """Gap identification step: one LLM_SCORING_MODEL call to find evidence gaps in draft proposals."""
         proposals_bullets = "\n".join(
             f"  - [{p.get('theme', '')}] {p.get('suggestion', '')}"
             for p in state["draft_proposals"]
@@ -706,11 +704,11 @@ class RAGAgent(Agent):
             sub_queries_run_bullets=queries_bullets,
             max_sub_queries=_MAX_SUB_QUERIES_PER_ITERATION,
         )
-        haiku = os.environ.get("LLM_SCORING_MODEL", "anthropic/claude-haiku-4-5-20251001")
+        scoring_model = os.environ["LLM_SCORING_MODEL"]
 
         try:
             response = await litellm.acompletion(
-                model=haiku,
+                model=scoring_model,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=300,
                 response_format={"type": "json_object"},

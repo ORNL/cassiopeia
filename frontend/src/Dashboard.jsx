@@ -10,7 +10,7 @@ function cleanTitle(raw) {
   if (!raw) return "";
   const ta = document.createElement("textarea");
   ta.innerHTML = raw;
-  return ta.value.replace(/<[^>]+>/g, "");
+  return ta.value.replaceAll(/<[^>]+>/g, "");
 }
 
 // ─────────────────────────────────────────────────
@@ -479,8 +479,8 @@ function CritiquePanel({ critique }) {
           {critique.confounds?.length > 0 && (
             <div style={S.critiqueSection}>
               <div style={S.critiqueSectionTitle}>Confounds</div>
-              {critique.confounds.map((item, i) => (
-                <SeverityChip key={i} concern={item.concern} severity={item.severity} />
+              {critique.confounds.map((item) => (
+                <SeverityChip key={item.concern} concern={item.concern} severity={item.severity} />
               ))}
             </div>
           )}
@@ -489,8 +489,8 @@ function CritiquePanel({ critique }) {
           {critique.feasibility_concerns?.length > 0 && (
             <div style={S.critiqueSection}>
               <div style={S.critiqueSectionTitle}>Practical concerns</div>
-              {critique.feasibility_concerns.map((item, i) => (
-                <SeverityChip key={i} concern={item.concern} severity={item.severity} />
+              {critique.feasibility_concerns.map((item) => (
+                <SeverityChip key={item.concern} concern={item.concern} severity={item.severity} />
               ))}
             </div>
           )}
@@ -645,10 +645,147 @@ RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate
 CombosTab.propTypes = { ragCombos: PropTypes.array, combos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
 
 // ─────────────────────────────────────────────────
+// Module-level helpers (excluded from Dashboard cognitive complexity)
+// ─────────────────────────────────────────────────
+
+async function fetchSearchResult(body) {
+  const res = await fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(err.detail || "Search failed");
+  }
+  return res.json();
+}
+
+function agentStatusText(status) {
+  if (status === null) return "Connecting...";
+  if (status?.status === "running")
+    return `Agent Active · ${status.total_papers_scored} papers · ${status.queries_executed} queries`;
+  return "Agent Starting...";
+}
+
+function searchButtonLabel(scanning, isReady, count) {
+  if (scanning) return "⏳ Scanning Sources...";
+  if (isReady) return `🔍 Run Literature Scan (${count} sources)`;
+  return "⏳ Waiting for Agent...";
+}
+
+function filterPapers(papers, credF, showNewOnly, newPaperIds) {
+  const base = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
+  return showNewOnly ? base.filter((p) => newPaperIds.has(p.paper_id)) : base;
+}
+
+function formatTimeRange(months) {
+  if (months < 12) return `${months} mo`;
+  const decimals = months % 12 === 0 ? 0 : 1;
+  return `${months} mo (${(months / 12).toFixed(decimals)} yr)`;
+}
+
+function comboTabLabel(ragCombos, combos) {
+  const count = ragCombos.length + combos.length;
+  return count ? `Combinations (${count})` : "Combinations";
+}
+
+// ─────────────────────────────────────────────────
+// Progress modal (polls scan stage every 600 ms)
+// ─────────────────────────────────────────────────
+
+const PROGRESS_STAGES = [
+  { key: "registering",  label: "Registering profile" },
+  { key: "searching",    label: "Querying sources & scoring papers" },
+  { key: "fetching",     label: "Selecting top results" },
+  { key: "indexing",     label: "Building knowledge base" },
+  { key: "synthesizing", label: "Synthesising proposals" },
+  { key: "feasibility",  label: "Feasibility analysis" },
+];
+
+const PS = {
+  overlay:  { position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" },
+  box:      { background: "#111827", border: "1px solid #1e293b", borderRadius: 14, padding: 28, width: 420, maxWidth: "92vw", boxShadow: "0 24px 60px #00000088" },
+  bar:      { height: 8, borderRadius: 4, background: "#1e293b", overflow: "hidden", marginBottom: 6 },
+  fill:     { height: "100%", borderRadius: 4, background: "linear-gradient(90deg, #4ade80, #22d3ee)", transition: "width 0.5s ease" },
+  closeBtn: { background: "none", border: "1px solid #334155", borderRadius: 6, color: "#94a3b8", fontSize: 14, padding: "2px 8px", cursor: "pointer" },
+  errBox:   { background: "#1f0f0f", border: "1px solid #7f1d1d", borderRadius: 8, padding: "10px 14px", color: "#fca5a5", fontSize: 12, marginTop: 12 },
+};
+
+function stageIcon(stageKey, currentStage, isDone) {
+  const keys = PROGRESS_STAGES.map((s) => s.key);
+  const thisIdx = keys.indexOf(stageKey);
+  const curIdx  = keys.indexOf(currentStage);
+  if (isDone || thisIdx < curIdx) return { icon: "✓", color: "#4ade80" };
+  if (thisIdx === curIdx)         return { icon: "⏳", color: "#fbbf24" };
+  return { icon: "○", color: "#334155" };
+}
+
+function ProgressModal({ researcherId, searching, onDismiss }) {
+  const [progress, setProgress] = useState(null);
+
+  // isDone: backend confirmed done, OR parent knows the scan finished (fallback for blocked polls)
+  const isDone = (progress?.done ?? false) || !searching;
+
+  useEffect(() => {
+    if (isDone) return;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/search/progress/${researcherId}`);
+        if (res.ok) setProgress(await res.json());
+      } catch { /* silent */ }
+    };
+    poll();
+    const id = setInterval(poll, 600);
+    return () => clearInterval(id);
+  }, [researcherId, isDone]);
+
+  const pct   = isDone ? 100 : (progress?.pct ?? 0);
+  const stage = progress?.stage ?? "registering";
+
+  return (
+    <div style={PS.overlay}>
+      <div style={PS.box}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 600, color: "#f1f5f9" }}>
+            {isDone ? "✅ Scan Complete" : "⏳ Literature Scan in Progress"}
+          </h3>
+          {isDone && <button onClick={onDismiss} style={PS.closeBtn}>✕</button>}
+        </div>
+        <div style={PS.bar}><div style={{ ...PS.fill, width: `${pct}%` }} /></div>
+        <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 700, textAlign: "right", marginBottom: 18 }}>{pct}%</div>
+        {PROGRESS_STAGES.map((s) => {
+          const { icon, color } = stageIcon(s.key, stage, isDone);
+          return (
+            <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
+              <span style={{ fontSize: 13, minWidth: 20, color }}>{icon}</span>
+              <span style={{ fontSize: 13, color: icon === "○" ? "#334155" : "#94a3b8" }}>{s.label}</span>
+            </div>
+          );
+        })}
+        {progress?.detail && <div style={{ fontSize: 12, color: "#475569", marginTop: 12, fontStyle: "italic" }}>{progress.detail}</div>}
+        {progress?.error && <div style={PS.errBox}>{progress.error}</div>}
+        {!isDone && (
+          <div style={{ fontSize: 11, color: "#334155", marginTop: 16, textAlign: "center" }}>
+            Closes automatically when the scan completes.
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ProgressModal.propTypes = {
+  researcherId: PropTypes.string.isRequired,
+  searching:    PropTypes.bool.isRequired,
+  onDismiss:    PropTypes.func.isRequired,
+};
+
+// ─────────────────────────────────────────────────
 // Main Dashboard
 // ─────────────────────────────────────────────────
 
-export default function Dashboard({ onBack, researcherName, researcherId, priorities, onOpenSettings }) {
+export default function Dashboard({ onBack, researcherName, researcherId, priorities, scanSettings, onOpenSettings }) {
   const [species, setSpecies] = useState(["poplar", "arabidopsis"]);
   const [stresses, setStresses] = useState(["drought", "nutrient"]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
@@ -663,7 +800,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [expPaper, setExpPaper] = useState(null);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
-  const [withCritique, setWithCritique] = useState(false);
+  const [showProgress, setShowProgress] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
   const [papers, setPapers] = useState([]);
@@ -779,77 +916,58 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const doSearch = useCallback(async () => {
     setSearching(true);
     setSearchError(null);
+    setShowProgress(true);
     try {
-      const res = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          researcher_id: RESEARCHER_ID,
-          name: researcherName || "Researcher",
-          plant_species: species,
-          stress_types: stresses,
-          phenotyping_methods: methods,
-          expertise_keywords: extractedKeywords,
-          priority_novelty: priorities.novelty,
-          priority_relevance: priorities.relevance,
-          priority_methodology: priorities.methodology,
-          priority_reproducibility: priorities.reproducibility,
-          time_range_months: timeRange,
-          source_targets: sources,
-          limit: 20,
-          with_critique: withCritique,
-        }),
+      const data = await fetchSearchResult({
+        researcher_id: RESEARCHER_ID,
+        name: researcherName || "Researcher",
+        plant_species: species,
+        stress_types: stresses,
+        phenotyping_methods: methods,
+        expertise_keywords: extractedKeywords,
+        priority_novelty: priorities.novelty,
+        priority_relevance: priorities.relevance,
+        priority_methodology: priorities.methodology,
+        priority_reproducibility: priorities.reproducibility,
+        time_range_months: timeRange,
+        source_targets: sources,
+        limit: 20,
+        with_critique: scanSettings.withCritique,
+        max_iterations: scanSettings.maxIterations,
       });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ detail: res.statusText }));
-        throw new Error(err.detail || "Search failed");
-      }
-      const data = await res.json();
       setPapers(data.papers);
       setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
       setContradictions(data.contradictions || []);
       setTab("results");
-      // Refresh session history
       fetch(`/api/sessions/${RESEARCHER_ID}`).then((r) => r.ok ? r.json() : []).then(setSessions).catch(() => {});
     } catch (err) {
       setSearchError(err.message);
+      setShowProgress(false);
     } finally {
       setSearching(false);
     }
-  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources]);
+  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings]);
 
-  const filtered = useMemo(() => {
-    let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
-    if (showNewOnly) result = result.filter((p) => newPaperIds.has(p.paper_id));
-    return result;
-  }, [papers, credF, showNewOnly, newPaperIds]);
+  const filtered = useMemo(
+    () => filterPapers(papers, credF, showNewOnly, newPaperIds),
+    [papers, credF, showNewOnly, newPaperIds],
+  );
 
   const isAgentReady = agentStatus?.status === "running";
 
-  let statusText;
-  if (agentStatus === null) statusText = "Connecting...";
-  else if (isAgentReady) statusText = `Agent Active · ${agentStatus.total_papers_scored} papers · ${agentStatus.queries_executed} queries`;
-  else statusText = "Agent Starting...";
+  const statusText = agentStatusText(agentStatus);
 
-  const comboCount = ragCombos.length + combos.length;
-  const comboLabel = comboCount ? `Combinations (${comboCount})` : "Combinations";
+  const comboLabel = comboTabLabel(ragCombos, combos);
 
-  const timeRangeDecimals = timeRange % 12 === 0 ? 0 : 1;
-  const timeRangeLabel = timeRange >= 12
-    ? `${timeRange} mo (${(timeRange / 12).toFixed(timeRangeDecimals)} yr)`
-    : `${timeRange} mo`;
+  const timeRangeLabel = formatTimeRange(timeRange);
 
-  let searchBtnLabel;
-  if (searching) searchBtnLabel = "⏳ Scanning Sources...";
-  else if (isAgentReady) searchBtnLabel = `🔍 Run Literature Scan (${sources.length} sources)`;
-  else searchBtnLabel = "⏳ Waiting for Agent...";
+  const searchBtnLabel = searchButtonLabel(searching, isAgentReady, sources.length);
 
   const newInResults = papers.filter((p) => newPaperIds.has(p.paper_id)).length;
-  const resultsLabel = papers.length
-    ? `Results (${papers.length}${newInResults > 0 ? ` · ${newInResults} new` : ""})`
-    : "Results";
+  const newSuffix = newInResults > 0 ? ` · ${newInResults} new` : "";
+  const resultsLabel = papers.length ? `Results (${papers.length}${newSuffix})` : "Results";
 
   return (
     <div style={S.root}>
@@ -1000,16 +1118,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               <div style={S.errBox}>{searchError}</div>
             )}
 
-            <label style={S.critiqueToggle}>
-              <input
-                type="checkbox"
-                checked={withCritique}
-                onChange={(e) => setWithCritique(e.target.checked)}
-                style={{ accentColor: "#22d3ee", cursor: "pointer" }}
-              />
-              <span>AI Critique</span>
-              <span style={{ color: "#475569" }}>— red-teams each proposal (adds ~5 Sonnet calls)</span>
-            </label>
             <button onClick={doSearch} disabled={searching || !isAgentReady || (!species.length && !stresses.length)}
               style={{ ...S.goBtn, ...((searching || !isAgentReady || (!species.length && !stresses.length)) ? S.goDis : {}) }}
             >
@@ -1105,6 +1213,13 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       </main>
 
       <footer style={S.footer}>APPL Facility · Academy Agent Framework · CASSIOPEIA v0.1</footer>
+      {showProgress && (
+        <ProgressModal
+          researcherId={RESEARCHER_ID}
+          searching={searching}
+          onDismiss={() => setShowProgress(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1256,5 +1371,6 @@ Dashboard.propTypes = {
     methodology: PropTypes.number.isRequired,
     reproducibility: PropTypes.number.isRequired,
   }).isRequired,
+  scanSettings: PropTypes.object.isRequired,
   onOpenSettings: PropTypes.func.isRequired,
 };

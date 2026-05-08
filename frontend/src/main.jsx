@@ -31,6 +31,30 @@ function storePriorities(id, prefs) {
   try { localStorage.setItem(`cassiopeia:priorities:${id}`, JSON.stringify(prefs)); } catch {}
 }
 
+// ── Scan settings ─────────────────────────────────────────────────────────────
+
+export const DEFAULT_SCAN_SETTINGS = {
+  withCritique: false,
+  maxIterations: 3,   // 0 = single-shot, 1–5 = iterative gather-evidence
+};
+
+export function loadScanSettings(id) {
+  try {
+    const raw = localStorage.getItem(`cassiopeia:scansettings:${id}`);
+    return raw ? { ...DEFAULT_SCAN_SETTINGS, ...JSON.parse(raw) } : null;
+  } catch { return null; }
+}
+
+function storeScanSettings(id, settings) {
+  try { localStorage.setItem(`cassiopeia:scansettings:${id}`, JSON.stringify(settings)); } catch {}
+}
+
+function iterationsLabel(n) {
+  if (n === 0) return "Off — single-shot (fastest)";
+  if (n === 1) return "1 iteration";
+  return `${n} iterations`;
+}
+
 // ── Slider (shared by PriorityModal and PrioritySetupStep) ───────────────────
 
 function priorityColor(v) {
@@ -66,32 +90,83 @@ Slider.propTypes = {
 
 // ── PriorityModal ─────────────────────────────────────────────────────────────
 
-function PriorityModal({ priorities, onSave, onClose }) {
+function PriorityModal({ priorities, scanSettings, onSave, onClose }) {
   const [local, setLocal] = useState({ ...priorities });
+  const [localScan, setLocalScan] = useState({ ...scanSettings });
   const set = (k) => (v) => setLocal((p) => ({ ...p, [k]: v }));
 
+  // Close on Escape key
+  useEffect(() => {
+    const handler = (e) => { if (e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [onClose]);
+
   return (
-    <div style={MS.overlay} onClick={(e) => e.target === e.currentTarget && onClose()}>
-      <div style={MS.box}>
+    <div style={MS.overlay}>
+      <dialog open aria-label="Settings" style={MS.box}>
         <div style={MS.head}>
-          <span style={MS.title}>Priority Weights</span>
-          <button style={MS.closeBtn} onClick={onClose}>✕</button>
+          <span style={MS.title}>Settings</span>
+          <button style={MS.closeBtn} onClick={onClose} aria-label="Close settings">✕</button>
         </div>
-        <p style={MS.sub}>Adjust how papers are ranked relative to your interests.</p>
+
+        <p style={MS.sectionLabel}>Paper ranking weights</p>
+        <p style={MS.sub}>Adjust how papers are scored against your profile.</p>
         {PRIORITY_LABELS.map(({ key, label, desc }) => (
           <Slider key={key} label={label} value={local[key]} onChange={set(key)} description={desc} />
         ))}
+
+        <div style={MS.divider} />
+
+        <p style={MS.sectionLabel}>Synthesis settings</p>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={localScan.withCritique}
+              onChange={(e) => setLocalScan((s) => ({ ...s, withCritique: e.target.checked }))}
+              style={{ accentColor: "#22d3ee", cursor: "pointer", width: 16, height: 16 }}
+            />
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>AI Critique</span>
+          </label>
+          <p style={{ ...MS.sub, margin: "4px 0 0 26px" }}>
+            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra Sonnet calls).
+          </p>
+        </div>
+
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>Iterative evidence gathering</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#4ade80" }}>{iterationsLabel(localScan.maxIterations)}</span>
+          </div>
+          <p style={{ ...MS.sub, margin: "2px 0 8px" }}>
+            The LLM identifies evidence gaps and fires targeted sub-queries before finalising proposals.
+            0 = single-shot (fastest); 3 is the recommended default.
+          </p>
+          <input
+            type="range" min="0" max="5" step="1"
+            value={localScan.maxIterations}
+            onChange={(e) => setLocalScan((s) => ({ ...s, maxIterations: Number(e.target.value) }))}
+            style={{ width: "100%", height: 4, cursor: "pointer", appearance: "auto", accentColor: "#4ade80" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#475569", marginTop: 4 }}>
+            <span>0 — off</span><span>1</span><span>2</span><span>3 ★</span><span>4</span><span>5</span>
+          </div>
+        </div>
+
         <div style={MS.actions}>
           <button style={MS.cancelBtn} onClick={onClose}>Cancel</button>
-          <button style={MS.saveBtn} onClick={() => onSave(local)}>Save</button>
+          <button style={MS.saveBtn} onClick={() => onSave(local, localScan)}>Save</button>
         </div>
-      </div>
+      </dialog>
     </div>
   );
 }
 
 PriorityModal.propTypes = {
   priorities: PropTypes.object.isRequired,
+  scanSettings: PropTypes.object.isRequired,
   onSave: PropTypes.func.isRequired,
   onClose: PropTypes.func.isRequired,
 };
@@ -182,33 +257,43 @@ function App() {
   const [mode, setMode] = useState(null); // null | "setup" | "dashboard" | "chat"
   const [researcher, setResearcher] = useState(null);
   const [priorities, setPriorities] = useState(DEFAULT_PRIORITIES);
+  const [scanSettings, setScanSettings] = useState(DEFAULT_SCAN_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
 
   const handleLogin = (name) => {
     if (!name) { setResearcher(null); setMode(null); return; }
     const id = name.toLowerCase().replaceAll(/\s+/g, "_");
-    const saved = loadPriorities(id);
+    const savedPriorities = loadPriorities(id);
+    const savedScan = loadScanSettings(id);
     setResearcher({ name, id });
-    if (saved) {
-      setPriorities(saved);
+    if (savedScan) setScanSettings(savedScan);
+    if (savedPriorities) {
+      setPriorities(savedPriorities);
       // mode stays null → LandingPage shows the interface-choice cards
     } else {
       setMode("setup");
     }
   };
 
-  const handleSavePriorities = (prefs) => {
+  const handleSaveSettings = (prefs, scan) => {
     setPriorities(prefs);
-    if (researcher) storePriorities(researcher.id, prefs);
+    setScanSettings(scan);
+    if (researcher) {
+      storePriorities(researcher.id, prefs);
+      storeScanSettings(researcher.id, scan);
+    }
     setShowSettings(false);
     if (mode === "setup") setMode(null); // proceed to interface choice
   };
+
+  // Setup step only saves priorities; scan settings use defaults until first modal open
+  const handleSavePrioritiesOnly = (prefs) => handleSaveSettings(prefs, scanSettings);
 
   const openSettings = () => setShowSettings(true);
   const closeSettings = () => setShowSettings(false);
 
   if (mode === "setup" && researcher)
-    return <PrioritySetupStep name={researcher.name} onSave={handleSavePriorities} />;
+    return <PrioritySetupStep name={researcher.name} onSave={handleSavePrioritiesOnly} />;
 
   if (mode === "dashboard" && researcher)
     return (
@@ -218,10 +303,16 @@ function App() {
           researcherName={researcher.name}
           researcherId={researcher.id}
           priorities={priorities}
+          scanSettings={scanSettings}
           onOpenSettings={openSettings}
         />
         {showSettings && (
-          <PriorityModal priorities={priorities} onSave={handleSavePriorities} onClose={closeSettings} />
+          <PriorityModal
+            priorities={priorities}
+            scanSettings={scanSettings}
+            onSave={handleSaveSettings}
+            onClose={closeSettings}
+          />
         )}
       </>
     );
@@ -235,7 +326,12 @@ function App() {
           onOpenSettings={openSettings}
         />
         {showSettings && (
-          <PriorityModal priorities={priorities} onSave={handleSavePriorities} onClose={closeSettings} />
+          <PriorityModal
+            priorities={priorities}
+            scanSettings={scanSettings}
+            onSave={handleSaveSettings}
+            onClose={closeSettings}
+          />
         )}
       </>
     );
@@ -327,6 +423,8 @@ const MS = {
   title: { fontSize: 16, fontWeight: 700, color: "#f1f5f9" },
   closeBtn: { background: "none", border: "none", color: "#64748b", fontSize: 16, cursor: "pointer", padding: "2px 6px" },
   sub: { fontSize: 13, color: "#64748b", margin: "0 0 20px", lineHeight: 1.6 },
+  sectionLabel: { fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.07em", margin: "0 0 4px" },
+  divider: { borderTop: "1px solid #1e293b", margin: "20px 0 16px" },
   actions: { display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 8 },
   cancelBtn: {
     background: "none", border: "1px solid #334155", borderRadius: 8,
