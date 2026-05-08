@@ -367,12 +367,19 @@ class RAGAgent(Agent):
 
         enriched = await self._enrich_proposals(proposals, researcher_id)
 
-        # Run verification concurrently across all proposals
-        verifications = await asyncio.gather(
-            *[self._verify_proposal_claims(p, paper_text_by_id) for p in enriched]
-        )
-        for proposal, verification in zip(enriched, verifications):
-            proposal["verification"] = verification
+        # Run verification concurrently. Wrapped in its own try/except so that a
+        # verification failure degrades gracefully instead of propagating up and
+        # clearing rag_combos in the caller's outer except block.
+        try:
+            verifications = await asyncio.gather(
+                *[self._verify_proposal_claims(p, paper_text_by_id) for p in enriched]
+            )
+            for proposal, verification in zip(enriched, verifications):
+                proposal["verification"] = verification
+        except Exception as exc:
+            logger.warning(
+                "Proposal verification failed — returning proposals without verification: %s", exc
+            )
 
         return enriched
 
