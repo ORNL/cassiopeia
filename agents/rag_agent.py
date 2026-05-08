@@ -24,7 +24,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 import aiohttp
 import litellm
@@ -50,6 +50,11 @@ def _proposal_id(suggestion: str) -> str:
 #   2 — Augmentation A (key_insights: [{paper_id, insight}], +verification)
 #   3 — Augmentation D (+critique, when with_critique=True)
 _PROPOSAL_SCHEMA_VERSION = 3
+
+# Augmentation C — iterative gather-evidence constants
+_MAX_ITERATIONS = 3
+_MAX_SUB_QUERIES_PER_ITERATION = 3
+_SUB_QUERY_TOP_K = 5
 
 
 _COMBINATIONS_PROMPT = """\
@@ -163,6 +168,56 @@ Return a single JSON object:
   "note": "<1-2 sentence plain-language summary>"
 }}
 """
+
+_GAP_IDENTIFICATION_PROMPT = """\
+You are reviewing draft experiment proposals to identify what additional \
+evidence from the literature would strengthen them.
+
+Draft proposals:
+{draft_proposals_bullets}
+
+Sub-queries already run (do NOT repeat these or close paraphrases):
+{sub_queries_run_bullets}
+
+Reply with strict JSON only, no preamble, no code fences:
+{{
+  "sub_queries": ["<short search-query string>", ...],
+  "done": true,
+  "reasoning": "<one sentence>"
+}}
+
+Rules:
+- Each sub-query should target a specific factual gap, not a vague topic.
+- Maximum {max_sub_queries} sub-queries. Often 0 or 1 is correct.
+- Set "done": true if the proposals are well-grounded and no targeted sub-query \
+would meaningfully improve them. In that case "sub_queries" must be [].
+- Set "done": false only if at least one sub-query is provided.
+"""
+
+_REFINEMENT_ADDENDUM = """\
+
+You have already drafted the following proposals in a previous pass. Review them \
+in light of the additional papers above and refine, expand, or replace them. \
+You may keep a proposal unchanged if it is already well-grounded.
+
+Previous draft proposals:
+{previous_proposals}
+"""
+
+
+class SynthesisState(TypedDict):
+    """State for the Augmentation C iterative synthesis graph."""
+    profile: dict                   # researcher profile: species, stresses, methods, keywords
+    initial_papers: list[dict]      # top-N from initial retrieval: {paper_id, document}
+    additional_papers: list[dict]   # accumulated across sub-queries, deduped
+    draft_proposals: list[dict]     # best proposals from most recent propose step
+    sub_queries_run: list[str]      # sub-queries already executed (avoid repeats)
+    pending_sub_queries: list[str]  # sub-queries from identify_gaps, to run in retrieve
+    iteration: int                  # 0-indexed; incremented by _propose_node
+    done: bool                      # True when LLM signals satisfaction or cap hit
+    liked_proposals: list[dict]     # passthrough from caller for steering
+    researcher_id: str              # for researcher-scoped ChromaDB queries
+    max_iterations: int             # hard cap, from caller
 
 
 class RAGAgent(Agent):
@@ -309,6 +364,7 @@ class RAGAgent(Agent):
         liked_proposals: list[dict] | None = None,
         with_critique: bool = False,
         instruments: list[str] | None = None,
+        max_iterations: int = _MAX_ITERATIONS,
     ) -> list[dict[str, Any]]:
         """Generate cross-paper experiment proposals by reasoning over multiple abstracts.
 
@@ -334,6 +390,9 @@ class RAGAgent(Agent):
                 before returning. Default False — existing callers are unaffected.
             instruments: Available facility instruments, forwarded to the critic
                 for feasibility_concerns assessment. Only used when with_critique=True.
+            max_iterations: Number of propose → identify_gaps → retrieve iterations
+                (Augmentation C). ``0`` reverts to the pre-C single-shot behavior
+                (one Sonnet call, no gap-finding loop). Default: ``_MAX_ITERATIONS`` (3).
 
         Returns:
             List of proposal dicts. Check ``schema_version`` to know the shape:
@@ -358,22 +417,44 @@ class RAGAgent(Agent):
         if not hits:
             return []
 
-        prompt = _COMBINATIONS_PROMPT.format(
-            species=", ".join(species) or "unspecified",
-            stresses=", ".join(stresses) or "unspecified",
-            methods=", ".join(methods) or "unspecified",
-            keywords=", ".join(keywords or []) or "none",
-            context=self._build_context_blocks(hits),
-            preference_block=self._build_preference_block(liked_proposals),
-        )
+        paper_text_by_id: dict[str, str] = {h["paper_id"]: h["document"] for h in hits}
+        profile = {
+            "species": species,
+            "stresses": stresses,
+            "methods": methods,
+            "keywords": keywords or [],
+        }
 
-        paper_text_by_id = {hit["paper_id"]: hit["document"] for hit in hits}
-
-        try:
-            proposals = await self._llm_proposals(prompt)
-        except Exception as exc:
-            logger.warning("synthesize_combinations failed: %s", exc)
-            return []
+        if max_iterations == 0:
+            prompt = _COMBINATIONS_PROMPT.format(
+                species=", ".join(species) or "unspecified",
+                stresses=", ".join(stresses) or "unspecified",
+                methods=", ".join(methods) or "unspecified",
+                keywords=", ".join(keywords or []) or "none",
+                context=self._build_context_blocks(hits),
+                preference_block=self._build_preference_block(liked_proposals),
+            )
+            try:
+                proposals = await self._llm_proposals(prompt)
+            except Exception as exc:
+                logger.warning("synthesize_combinations (single-shot) failed: %s", exc)
+                return []
+        else:
+            initial_papers = [{"paper_id": h["paper_id"], "document": h["document"]} for h in hits]
+            try:
+                final_state = await self._run_synthesis_graph(
+                    profile=profile,
+                    initial_papers=initial_papers,
+                    liked_proposals=liked_proposals or [],
+                    researcher_id=researcher_id,
+                    max_iterations=max_iterations,
+                )
+                proposals = final_state["draft_proposals"]
+                for p in final_state["additional_papers"]:
+                    paper_text_by_id.setdefault(p["paper_id"], p["document"])
+            except Exception as exc:
+                logger.warning("synthesize_combinations (iterative) failed: %s", exc)
+                return []
 
         enriched = await self._enrich_proposals(proposals, researcher_id)
         return await self._annotate_proposals(
@@ -564,6 +645,178 @@ class RAGAgent(Agent):
             })
 
         return await critique_proposal(proposal, similar_papers, instruments)
+
+    def _build_context_from_papers(self, papers: list[dict]) -> str:
+        """Format {paper_id, document} state-dicts into numbered context blocks for LLM prompts."""
+        blocks = []
+        for i, p in enumerate(papers, 1):
+            paper_id = p["paper_id"]
+            meta = self._store.get_paper_metadata(paper_id) or {}
+            title = meta.get("title", "Unknown")
+            blocks.append(
+                f"[Paper {i} | paper_id: {paper_id}] {title}\n{p['document'][:6000]}"
+            )
+        return "\n\n".join(blocks)
+
+    async def _propose_node(self, state: dict) -> dict:
+        """Propose step: one Sonnet call to generate or refine draft proposals."""
+        profile = state["profile"]
+        all_papers = state["initial_papers"] + state["additional_papers"]
+        context = self._build_context_from_papers(all_papers)
+        preference_block = self._build_preference_block(state["liked_proposals"])
+
+        refinement_block = ""
+        if state["iteration"] > 0 and state["draft_proposals"]:
+            prev = "\n".join(
+                f"  - [{p.get('theme', '')}] {p.get('suggestion', '')}"
+                for p in state["draft_proposals"]
+            )
+            refinement_block = _REFINEMENT_ADDENDUM.format(previous_proposals=prev)
+
+        prompt = _COMBINATIONS_PROMPT.format(
+            species=", ".join(profile.get("species", [])) or "unspecified",
+            stresses=", ".join(profile.get("stresses", [])) or "unspecified",
+            methods=", ".join(profile.get("methods", [])) or "unspecified",
+            keywords=", ".join(profile.get("keywords", [])) or "none",
+            context=context,
+            preference_block=preference_block,
+        ) + refinement_block
+
+        try:
+            proposals = await self._llm_proposals(prompt)
+        except Exception as exc:
+            logger.warning("_propose_node failed: %s", exc)
+            proposals = state["draft_proposals"]  # keep previous draft on failure
+
+        return {**state, "draft_proposals": proposals, "iteration": state["iteration"] + 1}
+
+    async def _identify_gaps_node(self, state: dict) -> dict:
+        """Gap identification step: one Haiku call to find evidence gaps in draft proposals."""
+        proposals_bullets = "\n".join(
+            f"  - [{p.get('theme', '')}] {p.get('suggestion', '')}"
+            for p in state["draft_proposals"]
+        ) or "  (none yet)"
+        queries_bullets = (
+            "\n".join(f"  - {q}" for q in state["sub_queries_run"])
+            if state["sub_queries_run"] else "  (none yet)"
+        )
+
+        prompt = _GAP_IDENTIFICATION_PROMPT.format(
+            draft_proposals_bullets=proposals_bullets,
+            sub_queries_run_bullets=queries_bullets,
+            max_sub_queries=_MAX_SUB_QUERIES_PER_ITERATION,
+        )
+        haiku = os.environ.get("LLM_SCORING_MODEL", "anthropic/claude-haiku-4-5-20251001")
+
+        try:
+            response = await litellm.acompletion(
+                model=haiku,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+                response_format={"type": "json_object"},
+                temperature=0.0,
+                timeout=15,
+            )
+            raw = response.choices[0].message.content.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1].lstrip("json").strip()
+            data = json.loads(raw)
+            sub_queries = [str(q) for q in data.get("sub_queries", [])][:_MAX_SUB_QUERIES_PER_ITERATION]
+            done = bool(data.get("done", False))
+            if not sub_queries:  # defensive: done: false but no queries → treat as done
+                done = True
+        except Exception as exc:
+            logger.warning("_identify_gaps_node failed: %s", exc)
+            sub_queries = []
+            done = True  # fail safe: don't loop on error
+
+        return {**state, "pending_sub_queries": sub_queries, "done": done}
+
+    async def _retrieve_node(self, state: dict) -> dict:
+        """Retrieval step: run pending sub-queries against ChromaDB, dedupe, accumulate."""
+        existing_ids = (
+            {p["paper_id"] for p in state["initial_papers"]}
+            | {p["paper_id"] for p in state["additional_papers"]}
+        )
+        where = {"researcher_id": state["researcher_id"]} if state["researcher_id"] else None
+
+        new_papers: list[dict] = []
+        for query in state["pending_sub_queries"]:
+            hits = self._rag.query(query, n_results=_SUB_QUERY_TOP_K, where=where)
+            for hit in hits:
+                if hit["paper_id"] not in existing_ids:
+                    existing_ids.add(hit["paper_id"])
+                    new_papers.append({"paper_id": hit["paper_id"], "document": hit["document"]})
+
+        done = len(new_papers) == 0  # no new evidence → no point re-proposing
+
+        return {
+            **state,
+            "additional_papers": state["additional_papers"] + new_papers,
+            "sub_queries_run": state["sub_queries_run"] + state["pending_sub_queries"],
+            "pending_sub_queries": [],
+            "done": done,
+        }
+
+    async def _finalize_node(self, state: dict) -> dict:
+        """Finalize step: passthrough. Downstream enrichment reads draft_proposals."""
+        return state
+
+    async def _run_synthesis_graph(
+        self,
+        *,
+        profile: dict,
+        initial_papers: list[dict],
+        liked_proposals: list[dict],
+        researcher_id: str,
+        max_iterations: int,
+    ) -> dict:
+        """Build and run the Augmentation C iterative synthesis StateGraph.
+
+        Returns the final state dict. Caller reads ``draft_proposals`` and
+        ``additional_papers`` to extend ``paper_text_by_id`` for verification.
+
+        Reuses the same ChromaDB query tool as ``synthesize`` — ``_retrieve_node``
+        calls ``self._rag.query()`` directly rather than building a parallel path.
+        """
+        from langgraph.graph import StateGraph, END
+
+        def _after_gaps(s: dict) -> str:
+            if s["done"] or not s["pending_sub_queries"] or s["iteration"] >= s["max_iterations"]:
+                return "finalize"
+            return "retrieve"
+
+        def _after_retrieve(s: dict) -> str:
+            return "finalize" if s["done"] else "propose"
+
+        graph: StateGraph = StateGraph(SynthesisState)
+        graph.add_node("propose", self._propose_node)
+        graph.add_node("identify_gaps", self._identify_gaps_node)
+        graph.add_node("retrieve", self._retrieve_node)
+        graph.add_node("finalize", self._finalize_node)
+
+        graph.set_entry_point("propose")
+        graph.add_edge("propose", "identify_gaps")
+        graph.add_conditional_edges("identify_gaps", _after_gaps)
+        graph.add_conditional_edges("retrieve", _after_retrieve)
+        graph.add_edge("finalize", END)
+
+        compiled = graph.compile()
+
+        initial_state: SynthesisState = {
+            "profile": profile,
+            "initial_papers": initial_papers,
+            "additional_papers": [],
+            "draft_proposals": [],
+            "sub_queries_run": [],
+            "pending_sub_queries": [],
+            "iteration": 0,
+            "done": False,
+            "liked_proposals": liked_proposals,
+            "researcher_id": researcher_id,
+            "max_iterations": max_iterations,
+        }
+        return await compiled.ainvoke(initial_state)
 
     async def _check_novelty(
         self, suggestion: str, researcher_id: str
