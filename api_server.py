@@ -149,6 +149,7 @@ class SearchRequest(BaseModel):
     time_range_months: int = 12
     source_targets: list[str] = []
     limit: int = 20
+    with_critique: bool = False
 
 
 class SynthesizeRequest(BaseModel):
@@ -245,6 +246,77 @@ async def preview_queries(req: PreviewQueriesRequest) -> list[dict[str, str]]:
     return result[:12]
 
 
+async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
+    """Index papers, synthesise proposals (optionally with critique), and assess feasibility."""
+    rag_combos: list = []
+    try:
+        logger.info("Indexing papers into ChromaDB…")
+        await _call(_rag_handle.index_new_papers())
+
+        liked: list[dict] = (
+            _paper_store.get_liked_proposals(req.researcher_id) if _paper_store else []
+        )
+        logger.info(
+            "Synthesizing RAG proposals (with_critique=%s)…", req.with_critique
+        )
+        rag_combos = await _call(
+            _rag_handle.synthesize_combinations(
+                researcher_id=req.researcher_id,
+                species=req.plant_species,
+                stresses=req.stress_types,
+                methods=req.phenotyping_methods,
+                keywords=req.expertise_keywords,
+                liked_proposals=liked or None,
+                with_critique=req.with_critique,
+                instruments=equipment,
+            )
+        )
+        if rag_combos and equipment:
+            rag_combos = await _call(
+                _rag_handle.assess_feasibility(
+                    proposals=rag_combos,
+                    available_equipment=equipment,
+                )
+            )
+    except Exception as exc:
+        logger.warning("RAG combination synthesis failed: %s", exc)
+    return rag_combos
+
+
+def _schedule_contradictions(researcher_id: str) -> None:
+    """Start contradiction detection in the background, inside the agent context."""
+    def _bg() -> None:
+        task = asyncio.get_running_loop().create_task(
+            _rag_handle.detect_contradictions(researcher_id)
+        )
+        task.add_done_callback(app.state.bg_tasks.discard)
+        app.state.bg_tasks.add(task)
+
+    _agent_ctx.run(_bg)
+
+
+def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
+    """Collect title/DOI metadata for every paper referenced in proposals.
+
+    Ensures the frontend can render titles and links for papers used in
+    synthesis that didn't make the top-N scored results list.
+    """
+    if _paper_store is None:
+        return {}
+    ref_ids: set[str] = set()
+    for combo in rag_combos:
+        ref_ids.update(combo.get("supporting_papers", []))
+        ref_ids.update(
+            ki["paper_id"] for ki in combo.get("key_insights", []) if ki.get("paper_id")
+        )
+    result: dict[str, dict] = {}
+    for pid in ref_ids:
+        meta = _paper_store.get_paper_metadata(pid)
+        if meta:
+            result[pid] = {"title": meta.get("title", ""), "doi": meta.get("doi")}
+    return result
+
+
 @app.post("/api/search", responses={503: {"description": "Mining agent not ready"}})
 async def search(req: SearchRequest) -> dict[str, Any]:
     if _mining_handle is None or _agent_ctx is None:
@@ -281,51 +353,9 @@ async def search(req: SearchRequest) -> dict[str, Any]:
     logger.info("Got %d combinations", len(combos))
 
     rag_combos: list = []
-    contradictions: list = []
     if _rag_handle is not None:
-        try:
-            logger.info("Indexing papers into ChromaDB…")
-            await _call(_rag_handle.index_new_papers())
-
-            liked: list[dict] = []
-            if _paper_store is not None:
-                liked = _paper_store.get_liked_proposals(req.researcher_id)
-
-            logger.info("Synthesizing RAG proposals…")
-            rag_combos = await _call(
-                _rag_handle.synthesize_combinations(
-                    researcher_id=req.researcher_id,
-                    species=req.plant_species,
-                    stresses=req.stress_types,
-                    methods=req.phenotyping_methods,
-                    keywords=req.expertise_keywords,
-                    liked_proposals=liked or None,
-                )
-            )
-
-            if rag_combos and equipment:
-                rag_combos = await _call(
-                    _rag_handle.assess_feasibility(
-                        proposals=rag_combos,
-                        available_equipment=equipment,
-                    )
-                )
-        except Exception as exc:
-            logger.warning("RAG combination synthesis failed: %s", exc)
-
-        def _bg_contradictions() -> None:
-            # Already inside _agent_ctx — create the task directly.
-            task = asyncio.get_running_loop().create_task(
-                _rag_handle.detect_contradictions(req.researcher_id)
-            )
-
-            def _discard(t: asyncio.Task) -> None:
-                app.state.bg_tasks.discard(t)
-
-            task.add_done_callback(_discard)
-            app.state.bg_tasks.add(task)
-
-        _agent_ctx.run(_bg_contradictions)
+        rag_combos = await _run_rag_synthesis(req, equipment)
+        _schedule_contradictions(req.researcher_id)
 
     if _paper_store is not None:
         _paper_store.save_session(
@@ -347,7 +377,8 @@ async def search(req: SearchRequest) -> dict[str, Any]:
         "papers": papers,
         "combos": combos,
         "rag_combos": rag_combos,
-        "contradictions": contradictions,
+        "contradictions": [],
+        "synthesis_paper_meta": _build_synthesis_paper_meta(rag_combos),
     }
 
 

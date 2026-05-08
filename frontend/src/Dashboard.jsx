@@ -379,7 +379,130 @@ function VerificationPanel({ v }) {
 
 VerificationPanel.propTypes = { v: PropTypes.object };
 
-function RagComboCard({ c, rating, onRate }) {
+// ── Augmentation D — Critique panel ──────────────────────────────────────────
+
+const RECOMMENDATION_STYLE = {
+  pursue:      { color: "#4ade80", bg: "#0a1f12", border: "#1a4a2a", label: "Pursue" },
+  refine:      { color: "#fbbf24", bg: "#1a1204", border: "#4a3a0a", label: "Refine" },
+  deprioritize:{ color: "#f87171", bg: "#1a0808", border: "#4a1a1a", label: "Deprioritize" },
+};
+
+const NOVELTY_STYLE = {
+  novel:       { color: "#4ade80", label: "Novel" },
+  incremental: { color: "#fbbf24", label: "Incremental" },
+  duplicative: { color: "#f87171", label: "Duplicative" },
+};
+
+const EVIDENCE_STYLE = {
+  well_supported: { color: "#4ade80", label: "Well supported" },
+  partial:        { color: "#fbbf24", label: "Partially supported" },
+  overreaching:   { color: "#f87171", label: "Overreaching" },
+};
+
+const SEVERITY_COLOR = { low: "#64748b", medium: "#fbbf24", high: "#f87171" };
+
+function SeverityChip({ concern, severity }) {
+  return (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 6, marginBottom: 4 }}>
+      <span style={{ fontSize: 10, fontWeight: 700, color: SEVERITY_COLOR[severity] || "#64748b",
+        background: "#0c0f1a", border: `1px solid ${SEVERITY_COLOR[severity] || "#64748b"}`,
+        borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
+        {severity}
+      </span>
+      <span style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.4 }}>{concern}</span>
+    </div>
+  );
+}
+
+SeverityChip.propTypes = { concern: PropTypes.string.isRequired, severity: PropTypes.string.isRequired };
+
+function CritiquePanel({ critique }) {
+  const [expanded, setExpanded] = useState(false);
+  if (!critique) return null;
+
+  const rec = RECOMMENDATION_STYLE[critique.overall_recommendation] || RECOMMENDATION_STYLE.refine;
+  const novelty = NOVELTY_STYLE[critique.novelty?.assessment] || {};
+  const evidence = EVIDENCE_STYLE[critique.evidence_strength?.assessment] || {};
+
+  return (
+    <div style={{ marginTop: 10, borderTop: "1px solid #0e2a4a", paddingTop: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+        <span style={{ fontSize: 10, fontWeight: 700, color: rec.color,
+          background: rec.bg, border: `1px solid ${rec.border}`,
+          borderRadius: 10, padding: "2px 10px", whiteSpace: "nowrap" }}>
+          ✦ {rec.label}
+        </span>
+        {critique.summary && (
+          <span style={{ fontSize: 12, color: "#64748b", flex: 1, minWidth: 0 }}>
+            {critique.summary}
+          </span>
+        )}
+        <button onClick={() => setExpanded((x) => !x)} style={S.verifyBtn}>
+          Critique {expanded ? "▲" : "▼"}
+        </button>
+      </div>
+
+      {expanded && (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+          {/* Novelty */}
+          <div style={S.critiqueSection}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={S.critiqueSectionTitle}>Novelty</span>
+              {novelty.label && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: novelty.color }}>{novelty.label}</span>
+              )}
+            </div>
+            {critique.novelty?.reasoning && (
+              <div style={S.critiqueText}>{critique.novelty.reasoning}</div>
+            )}
+            {critique.novelty?.closest_prior_work && (
+              <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>
+                Closest prior: <em>{critique.novelty.closest_prior_work}</em>
+              </div>
+            )}
+          </div>
+
+          {/* Evidence strength */}
+          <div style={S.critiqueSection}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+              <span style={S.critiqueSectionTitle}>Evidence</span>
+              {evidence.label && (
+                <span style={{ fontSize: 11, fontWeight: 700, color: evidence.color }}>{evidence.label}</span>
+              )}
+            </div>
+            {critique.evidence_strength?.reasoning && (
+              <div style={S.critiqueText}>{critique.evidence_strength.reasoning}</div>
+            )}
+          </div>
+
+          {/* Confounds */}
+          {critique.confounds?.length > 0 && (
+            <div style={S.critiqueSection}>
+              <div style={S.critiqueSectionTitle}>Confounds</div>
+              {critique.confounds.map((item, i) => (
+                <SeverityChip key={i} concern={item.concern} severity={item.severity} />
+              ))}
+            </div>
+          )}
+
+          {/* Feasibility concerns */}
+          {critique.feasibility_concerns?.length > 0 && (
+            <div style={S.critiqueSection}>
+              <div style={S.critiqueSectionTitle}>Practical concerns</div>
+              {critique.feasibility_concerns.map((item, i) => (
+                <SeverityChip key={i} concern={item.concern} severity={item.severity} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+CritiquePanel.propTypes = { critique: PropTypes.object };
+
+function RagComboCard({ c, rating, onRate, paperById }) {
   return (
     <div style={S.ragComboCard}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
@@ -401,6 +524,25 @@ function RagComboCard({ c, rating, onRate }) {
           {c.rationale}
         </div>
       )}
+      {c.supporting_papers && c.supporting_papers.length > 0 && (
+        <div style={S.supportBlock}>
+          <div style={S.supportTitle}>Supporting Papers</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            {c.supporting_papers.map((pid) => {
+              const paper = paperById?.[pid];
+              const url = paper?.doi ? `https://doi.org/${paper.doi}` : paper?.url;
+              const label = paper ? cleanTitle(paper.title) : pid.slice(0, 8);
+              return url ? (
+                <a key={pid} href={url} target="_blank" rel="noreferrer" style={S.supportLink} title={label}>
+                  {label} <span style={{ opacity: 0.5 }}>↗</span>
+                </a>
+              ) : (
+                <span key={pid} style={S.supportChip} title={pid}>{label}</span>
+              );
+            })}
+          </div>
+        </div>
+      )}
       {c.key_insights && c.key_insights.length > 0 && (
         <div style={S.insightBlock}>
           <div style={S.insightTitle}>Key insights</div>
@@ -413,6 +555,7 @@ function RagComboCard({ c, rating, onRate }) {
         </div>
       )}
       <VerificationPanel v={c.verification} />
+      <CritiquePanel critique={c.critique} />
       <FeasibilityDetail f={c.feasibility} />
     </div>
   );
@@ -421,7 +564,16 @@ function RagComboCard({ c, rating, onRate }) {
 FeasibilityBadge.propTypes = { f: PropTypes.object };
 FeasibilityDetail.propTypes = { f: PropTypes.object };
 
-function CombosTab({ ragCombos, combos, ratings, onRate }) {
+function CombosTab({ ragCombos, combos, ratings, onRate, papers, synthesisPaperMeta }) {
+  const paperById = useMemo(() => {
+    const map = Object.fromEntries((papers || []).map((p) => [p.paper_id, p]));
+    // Merge in metadata for synthesis papers not in the top-N results list
+    for (const [pid, meta] of Object.entries(synthesisPaperMeta || {})) {
+      if (!map[pid]) map[pid] = meta;
+    }
+    return map;
+  }, [papers, synthesisPaperMeta]);
+
   const grouped = useMemo(() => {
     const map = new Map();
     for (const c of ragCombos) {
@@ -454,7 +606,7 @@ function CombosTab({ ragCombos, combos, ratings, onRate }) {
             <div key={theme}>
               <div style={S.themeHeader}>{theme}</div>
               {items.map((c) => (
-                <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} />
+                <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} />
               ))}
             </div>
           ))}
@@ -469,7 +621,16 @@ function CombosTab({ ragCombos, combos, ratings, onRate }) {
             <div key={c.source_doi || c.suggestion} style={S.comboCard}>
               <div style={{ fontSize: 14, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 8 }}>{c.suggestion}</div>
               <div style={{ fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>From: <em>{c.source_paper}</em></span>
+                <span>From:{" "}
+                  {c.source_doi ? (
+                    <a href={`https://doi.org/${c.source_doi}`} target="_blank" rel="noreferrer"
+                      style={{ color: "#22d3ee", textDecoration: "none", fontStyle: "italic" }}>
+                      {c.source_paper} <span style={{ opacity: 0.5 }}>↗</span>
+                    </a>
+                  ) : (
+                    <em>{c.source_paper}</em>
+                  )}
+                </span>
                 <span>{CREDIBILITY_ICONS[c.paper_credibility]} {c.paper_credibility}</span>
               </div>
             </div>
@@ -480,8 +641,8 @@ function CombosTab({ ragCombos, combos, ratings, onRate }) {
   );
 }
 
-RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func };
-CombosTab.propTypes = { ragCombos: PropTypes.array, combos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func };
+RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object };
+CombosTab.propTypes = { ragCombos: PropTypes.array, combos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
 
 // ─────────────────────────────────────────────────
 // Main Dashboard
@@ -502,9 +663,11 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [expPaper, setExpPaper] = useState(null);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
+  const [withCritique, setWithCritique] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState(null);
   const [papers, setPapers] = useState([]);
+  const [synthesisPaperMeta, setSynthesisPaperMeta] = useState({});
   const [combos, setCombos] = useState([]);
   const [ragCombos, setRagCombos] = useState([]);
   const [contradictions, setContradictions] = useState([]);
@@ -634,6 +797,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
           time_range_months: timeRange,
           source_targets: sources,
           limit: 20,
+          with_critique: withCritique,
         }),
       });
       if (!res.ok) {
@@ -642,6 +806,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       }
       const data = await res.json();
       setPapers(data.papers);
+      setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
       setContradictions(data.contradictions || []);
@@ -835,6 +1000,16 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               <div style={S.errBox}>{searchError}</div>
             )}
 
+            <label style={S.critiqueToggle}>
+              <input
+                type="checkbox"
+                checked={withCritique}
+                onChange={(e) => setWithCritique(e.target.checked)}
+                style={{ accentColor: "#22d3ee", cursor: "pointer" }}
+              />
+              <span>AI Critique</span>
+              <span style={{ color: "#475569" }}>— red-teams each proposal (adds ~5 Sonnet calls)</span>
+            </label>
             <button onClick={doSearch} disabled={searching || !isAgentReady || (!species.length && !stresses.length)}
               style={{ ...S.goBtn, ...((searching || !isAgentReady || (!species.length && !stresses.length)) ? S.goDis : {}) }}
             >
@@ -881,6 +1056,8 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
             combos={combos}
             ratings={ratings}
             onRate={doRate}
+            papers={papers}
+            synthesisPaperMeta={synthesisPaperMeta}
           />
         )}
 
@@ -1033,6 +1210,10 @@ const S = {
 
   ragBadge: { fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 10px", borderRadius: 12, background: "#0c1f2d", border: "1px solid #0e4a6e", color: "#22d3ee" },
   ragComboCard: { background: "#0c1422", border: "1px solid #0e2a4a", borderRadius: 10, padding: 18, marginBottom: 12 },
+  supportBlock: { background: "#0a1020", borderRadius: 8, padding: "8px 12px", marginBottom: 8, marginTop: 4 },
+  supportTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 },
+  supportLink: { fontSize: 11, fontWeight: 600, color: "#22d3ee", background: "#0c1f2d", border: "1px solid #0e3a5e", borderRadius: 6, padding: "2px 8px", textDecoration: "none", whiteSpace: "nowrap", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" },
+  supportChip: { fontSize: 11, fontWeight: 600, color: "#475569", background: "#0c0f1a", border: "1px solid #1e293b", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" },
   insightBlock: { background: "#0c0f1a", borderRadius: 8, padding: "10px 14px", marginTop: 4 },
   insightTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 },
   insightRow: { display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" },
@@ -1055,6 +1236,10 @@ const S = {
   sessionDate: { fontSize: 12, color: "#64748b", fontVariantNumeric: "tabular-nums", minWidth: 130 },
   sessionMeta: { fontSize: 12, color: "#94a3b8", fontWeight: 600 },
 
+  critiqueToggle: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#94a3b8", cursor: "pointer", marginBottom: 10 },
+  critiqueSection: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px" },
+  critiqueSectionTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em" },
+  critiqueText: { fontSize: 12, color: "#64748b", lineHeight: 1.5, marginTop: 2 },
   verifyFlag: { fontSize: 10, fontWeight: 700, color: "#fbbf24", background: "#1a1204", border: "1px solid #7c5a0a", borderRadius: 10, padding: "2px 10px", whiteSpace: "nowrap" },
   verifyBtn: { fontSize: 10, fontWeight: 600, color: "#64748b", background: "none", border: "1px solid #334155", borderRadius: 10, padding: "2px 10px", cursor: "pointer" },
   verifyDetails: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 },

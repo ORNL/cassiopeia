@@ -211,6 +211,7 @@ async def search_literature(
     priority_methodology: float = 0.5,
     priority_reproducibility: float = 0.5,
     limit: int = 20,
+    with_critique: bool = False,
 ) -> str:
     """Run a full literature search cycle for a researcher profile.
 
@@ -218,11 +219,12 @@ async def search_literature(
 
     - ``papers``: top scored papers
     - ``combos``: per-paper hypotheses
-    - ``rag_combos``: cross-paper proposals with feasibility and verification
-      annotations. Each proposal has the following shape::
+    - ``rag_combos``: cross-paper proposals with feasibility, verification, and
+      (when ``with_critique=True``) critic annotations. Each proposal shape::
 
           {
             "proposal_id": str,
+            "schema_version": int,     # see version table below
             "theme": str,
             "suggestion": str,
             "rationale": str,          # may contain [paper_id] citation tags
@@ -242,7 +244,22 @@ async def search_literature(
                  "supported": bool | None, "confidence": float | None,
                  "reason": str}
               ]
-            }
+            },
+            "critique": {              # Augmentation D — present iff with_critique=True
+              "novelty": {
+                "assessment": "novel" | "incremental" | "duplicative",
+                "reasoning": str,
+                "closest_prior_work": str | None
+              },
+              "confounds": [{"concern": str, "severity": "low"|"medium"|"high"}],
+              "evidence_strength": {
+                "assessment": "well_supported" | "partial" | "overreaching",
+                "reasoning": str
+              },
+              "feasibility_concerns": [{"concern": str, "severity": "low"|"medium"|"high"}],
+              "overall_recommendation": "pursue" | "refine" | "deprioritize",
+              "summary": str
+            }                          # None if the critic LLM call failed
           }
 
     Each ``rag_combos`` item carries a ``schema_version`` integer so clients
@@ -251,10 +268,17 @@ async def search_literature(
     ======  ===================================================================
     v1      Legacy — no longer produced. ``key_insights`` used ``{paper, insight}``.
             No ``verification`` field.
-    v2      Current. ``key_insights`` is ``[{paper_id, insight}]``.
-            ``verification`` field always present.
-    v3      Reserved for Augmentation D (``critique`` field).
+    v2      ``key_insights`` is ``[{paper_id, insight}]``.
+            ``verification`` field always present.  No longer produced.
+    v3      Current. All v2 fields plus ``critique`` when ``with_critique=True``.
+            Branch on ``schema_version >= 3`` and check ``critique is not None``
+            before reading critique sub-fields.
     ======  ===================================================================
+
+    Cost note (v3): one synthesis call (Sonnet) + ~3N Haiku verification calls
+    + N Sonnet critique calls per cycle.  For N=5 proposals that is ~21 LLM
+    calls.  Pass ``with_critique=False`` (the default) to skip the critic pass
+    when latency or cost is a concern.
 
     .. note::
         ``key_insights`` changed shape in Augmentation A from
@@ -306,6 +330,8 @@ async def search_literature(
                     methods=phenotyping_methods,
                     keywords=expertise_keywords,
                     liked_proposals=liked or None,
+                    with_critique=with_critique,
+                    instruments=equipment,
                 )
             )
 

@@ -48,8 +48,8 @@ def _proposal_id(suggestion: str) -> str:
 # Bump this when the proposal dict shape changes in a breaking way:
 #   1 — original shape (key_insights: [{paper, insight}], no verification)
 #   2 — Augmentation A (key_insights: [{paper_id, insight}], +verification)
-#   3 — Augmentation D (+critique)  ← increment when D lands
-_PROPOSAL_SCHEMA_VERSION = 2
+#   3 — Augmentation D (+critique, when with_critique=True)
+_PROPOSAL_SCHEMA_VERSION = 3
 
 
 _COMBINATIONS_PROMPT = """\
@@ -307,6 +307,8 @@ class RAGAgent(Agent):
         keywords: list[str] | None = None,
         n_papers: int = 12,
         liked_proposals: list[dict] | None = None,
+        with_critique: bool = False,
+        instruments: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Generate cross-paper experiment proposals by reasoning over multiple abstracts.
 
@@ -316,6 +318,8 @@ class RAGAgent(Agent):
         3. Sends them **all together** in a single LLM call, asking for novel
            multi-paper experiment proposals that combine findings across papers
         4. Checks each proposal for novelty against already-liked proposals
+        5. Verifies key_insights against source abstracts (Augmentation A)
+        6. Optionally runs a critic pass over each proposal (Augmentation D)
 
         Args:
             researcher_id: Researcher to scope results to.
@@ -326,11 +330,17 @@ class RAGAgent(Agent):
             n_papers: Number of abstracts to retrieve from ChromaDB.
             liked_proposals: Previously liked proposals to avoid duplicating
                 and to steer the LLM towards unexplored territory.
+            with_critique: When True, runs ``critique_proposals`` (Augmentation D)
+                before returning. Default False — existing callers are unaffected.
+            instruments: Available facility instruments, forwarded to the critic
+                for feasibility_concerns assessment. Only used when with_critique=True.
 
         Returns:
             List of proposal dicts. Check ``schema_version`` to know the shape:
 
-            * **v2** (current) — ``proposal_id``, ``theme``, ``suggestion``,
+            * **v3** (current) — all v2 fields plus ``critique`` when
+              ``with_critique=True`` (None if the critic call failed).
+            * **v2** — ``proposal_id``, ``theme``, ``suggestion``,
               ``rationale`` (with ``[paper_id]`` citation tags),
               ``key_insights`` (list of ``{paper_id, insight}`` dicts),
               ``supporting_papers``, ``novelty_warning``, ``verification``.
@@ -366,22 +376,38 @@ class RAGAgent(Agent):
             return []
 
         enriched = await self._enrich_proposals(proposals, researcher_id)
+        return await self._annotate_proposals(
+            enriched, paper_text_by_id, with_critique, instruments or []
+        )
 
-        # Run verification concurrently. Wrapped in its own try/except so that a
-        # verification failure degrades gracefully instead of propagating up and
-        # clearing rag_combos in the caller's outer except block.
+    async def _annotate_proposals(
+        self,
+        proposals: list[dict],
+        paper_text_by_id: dict[str, str],
+        with_critique: bool,
+        instruments: list[str],
+    ) -> list[dict]:
+        """Attach verification (Aug A) and optionally critique (Aug D) to enriched proposals.
+
+        Each step degrades gracefully on failure — proposals are still returned
+        without the missing field rather than propagating an exception.
+        """
         try:
             verifications = await asyncio.gather(
-                *[self._verify_proposal_claims(p, paper_text_by_id) for p in enriched]
+                *[self._verify_proposal_claims(p, paper_text_by_id) for p in proposals]
             )
-            for proposal, verification in zip(enriched, verifications):
+            for proposal, verification in zip(proposals, verifications):
                 proposal["verification"] = verification
         except Exception as exc:
-            logger.warning(
-                "Proposal verification failed — returning proposals without verification: %s", exc
-            )
+            logger.warning("Verification failed — proposals returned without it: %s", exc)
 
-        return enriched
+        if with_critique:
+            try:
+                proposals = await self.critique_proposals(proposals, instruments)
+            except Exception as exc:
+                logger.warning("Critique failed — proposals returned without it: %s", exc)
+
+        return proposals
 
     async def _enrich_proposals(
         self, proposals: list[dict], researcher_id: str
@@ -481,6 +507,63 @@ class RAGAgent(Agent):
             "flagged": flagged,
             "details": details,
         }
+
+    @action
+    async def critique_proposals(
+        self,
+        proposals: list[dict[str, Any]],
+        instruments: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Annotate proposals with structured critique from a critic LLM (Augmentation D).
+
+        One Sonnet call per proposal, run concurrently via ``asyncio.gather``.
+        Each proposal is annotated with a ``critique`` dict covering:
+
+        - ``novelty`` — is the experiment genuinely novel, with a semantic search
+          for the closest prior work in ChromaDB?
+        - ``confounds`` — specific experimental confounds and their severity.
+        - ``evidence_strength`` — does the rationale stretch beyond what the cited
+          papers actually show?
+        - ``feasibility_concerns`` — practical concerns *beyond* instrument
+          availability (sample size, time horizon, statistical power, ethics).
+          Instrument-level feasibility is handled separately by ``assess_feasibility``.
+        - ``overall_recommendation`` — pursue / refine / deprioritize.
+        - ``summary`` — one-sentence overview of the critique.
+
+        If the LLM call for a proposal fails, that proposal's ``critique`` is None.
+
+        Args:
+            proposals: List of proposal dicts from ``synthesize_combinations``.
+                Should already have ``verification`` attached (Augmentation A).
+            instruments: Available facility instruments for feasibility assessment.
+        """
+        _instruments = instruments or []
+        critiques = await asyncio.gather(
+            *[self._critique_one_proposal(p, _instruments) for p in proposals]
+        )
+        return [{**p, "critique": c} for p, c in zip(proposals, critiques)]
+
+    async def _critique_one_proposal(
+        self,
+        proposal: dict,
+        instruments: list[str],
+    ) -> dict | None:
+        """Retrieve semantically similar papers, then run one critique call."""
+        from utils.llm_critic import critique_proposal
+
+        suggestion = proposal.get("suggestion", "")
+        similar_hits = self._rag.query(suggestion, n_results=5) if suggestion else []
+
+        similar_papers = []
+        for hit in similar_hits:
+            meta = self._store.get_paper_metadata(hit["paper_id"]) or {}
+            similar_papers.append({
+                "paper_id": hit["paper_id"],
+                "title": meta.get("title", ""),
+                "document": hit["document"][:500],
+            })
+
+        return await critique_proposal(proposal, similar_papers, instruments)
 
     async def _check_novelty(
         self, suggestion: str, researcher_id: str
