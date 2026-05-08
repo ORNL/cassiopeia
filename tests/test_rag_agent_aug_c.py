@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -27,7 +28,7 @@ def _make_agent():
     agent._store.set_verify_cache.return_value = None
     agent._rag = MagicMock()
     agent._rag.query.return_value = []
-    agent._chat_model = "anthropic/claude-sonnet-4-6"
+    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
     return agent
 
 

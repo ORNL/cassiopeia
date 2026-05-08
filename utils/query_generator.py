@@ -128,7 +128,7 @@ class QueryGenerator:
         past_queries: list[str] | None = None,
     ) -> list[SearchQuery]:
         """LLM-driven query generation with cross-product fallback."""
-        model = os.environ.get("LLM_SCORING_MODEL", "anthropic/claude-haiku-4-5-20251001")
+        model = os.environ["LLM_SCORING_MODEL"]
         allowed = self._allowed_sources(profile)
         source_values = [s.value for s in allowed]
 

@@ -93,10 +93,7 @@ class LLMPaperScorer:
     MID_IMPACT_JOURNALS = PaperScorer.MID_IMPACT_JOURNALS
 
     def __init__(self) -> None:
-        self._model = os.environ.get(
-            "LLM_SCORING_MODEL",
-            "anthropic/claude-haiku-4-5-20251001",
-        )
+        self._model = os.environ["LLM_SCORING_MODEL"]
         self._enabled = (
             os.environ.get("LLM_SCORING_ENABLED", "true").lower() == "true"
         )

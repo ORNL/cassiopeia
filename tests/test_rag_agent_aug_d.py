@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -25,7 +26,7 @@ def _make_agent():
     agent._store.get_paper_metadata.return_value = {"title": "Test Paper"}
     agent._rag = MagicMock()
     agent._rag.query.return_value = []
-    agent._chat_model = "anthropic/claude-sonnet-4-6"
+    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
     return agent
 
 
@@ -133,7 +134,7 @@ async def test_synthesize_combinations_with_critique_false():
     agent._rag.query.return_value = [
         {"paper_id": "p1", "document": "Abstract text.", "distance": 0.5}
     ]
-    agent._chat_model = "anthropic/claude-sonnet-4-6"
+    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
 
     fake_proposal = {
         "theme": "test theme",
@@ -178,7 +179,7 @@ async def test_synthesize_combinations_with_critique_true():
     agent._rag.query.return_value = [
         {"paper_id": "p1", "document": "Abstract text.", "distance": 0.5}
     ]
-    agent._chat_model = "anthropic/claude-sonnet-4-6"
+    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
 
     fake_proposal = {
         "theme": "test theme",

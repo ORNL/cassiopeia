@@ -1,18 +1,14 @@
 # Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""LiteLLM-backed proposal critic (Augmentation D).
+"""LiteLLM-backed proposal critic.
 
 Evaluates a proposed plant phenotyping experiment from a skeptical reviewer
 perspective, checking novelty, confounds, evidence strength, feasibility, and
 providing an overall recommendation.
 
-Uses LLM_CHAT_MODEL (defaults to Sonnet) since critique is a substantive
-reasoning task that benefits from a stronger model than verification.
-
-Augmentation D depends on Augmentation A because it feeds verification.details
-from the verifier into the critic prompt, allowing the critic to reason about
-how well the key insights are supported by the source papers.
+Uses LLM_CHAT_MODEL since critique is a substantive reasoning task that
+benefits from a stronger model than verification.
 
 On persistent failure returns None so the caller can omit the critique field
 rather than propagating a dict with nulls.
@@ -77,7 +73,6 @@ overall_recommendation in {{pursue, refine, deprioritize}}.
 If a list dimension has no concerns, return an empty list.
 """
 
-_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 _MAX_RETRIES = 2
 
 
@@ -138,7 +133,7 @@ async def critique_proposal(
     instruments: list[str],
     model: str | None = None,
 ) -> dict | None:
-    """Critique a single experiment proposal using a Sonnet LLM call.
+    """Critique a single experiment proposal using a LLM_SCORING_MODEL call.
 
     Makes one LLM call per proposal; returns a critique dict on success or
     None on persistent failure. Augmentation D depends on Augmentation A
@@ -153,15 +148,15 @@ async def critique_proposal(
             (for novelty assessment). Each may have title/paper_id and
             document/abstract_snippet keys.
         instruments: Flat list of instrument names available at the facility.
-        model: Override the LiteLLM model string. Defaults to LLM_CHAT_MODEL
-            env var or anthropic/claude-sonnet-4-6.
+        model: Override the LiteLLM model string. Defaults to LLM_CHAT_MODEL env var.
 
     Returns:
         Critique dict with keys: novelty, confounds, evidence_strength,
         feasibility_concerns, overall_recommendation, summary. Returns None
         if all retry attempts fail so the caller can omit the critique field.
     """
-    _model = model or os.environ.get("LLM_CHAT_MODEL", _DEFAULT_MODEL)
+    _model = model or os.environ["LLM_CHAT_MODEL"]
+
 
     theme = proposal.get("theme", "")
     suggestion = proposal.get("suggestion", "")
@@ -207,7 +202,7 @@ async def critique_proposal(
             data.setdefault("confounds", [])
             data.setdefault("feasibility_concerns", [])
             return data
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        except (json.JSONDecodeError, KeyError) as exc:
             last_exc = exc
             logger.debug("critique_proposal parse error (attempt %d): %s", attempt + 1, exc)
             # Retry on parse failures — model may have wrapped JSON in prose

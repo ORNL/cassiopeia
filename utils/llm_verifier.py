@@ -6,8 +6,8 @@
 Checks whether a stated insight is genuinely supported by a paper's abstract.
 Mirrors the structure of utils/llm_scorer.py.
 
-Uses the same LLM_SCORING_MODEL env var (defaults to Haiku) since verification
-is a lightweight reading-comprehension task.
+Uses the LLM_SCORING_MODEL env var since verification is a lightweight
+reading-comprehension task.
 
 On persistent failure returns supported=None so infrastructure errors are not
 counted as hallucinations in the flagging threshold.
@@ -48,7 +48,6 @@ Rules:
 - "confidence" is your confidence in the supported/unsupported judgment, not in the insight itself.
 """
 
-_DEFAULT_MODEL = "anthropic/claude-haiku-4-5-20251001"
 _MAX_RETRIES = 2
 
 
@@ -63,7 +62,7 @@ async def verify_claim(
     On persistent failure: supported=None, confidence=None, reason="verification_failed".
     Retries up to _MAX_RETRIES times on JSON parse failures; stops early on LLM errors.
     """
-    _model = model or os.environ.get("LLM_SCORING_MODEL", _DEFAULT_MODEL)
+    _model = model or os.environ["LLM_SCORING_MODEL"]
     prompt = _VERIFY_PROMPT.format(paper_text=paper_text[:6000], insight=insight)
 
     last_exc: Exception | None = None
@@ -86,7 +85,7 @@ async def verify_claim(
                 "confidence": float(data.get("confidence", 0.0)),
                 "reason": str(data.get("reason", "")),
             }
-        except (json.JSONDecodeError, KeyError, ValueError) as exc:
+        except (json.JSONDecodeError, KeyError) as exc:
             last_exc = exc
             logger.debug("verify_claim parse error (attempt %d): %s", attempt + 1, exc)
             # Retry on parse failures — model may have wrapped JSON in prose
