@@ -4,6 +4,15 @@
 import { useState, useCallback, useMemo, useEffect } from "react";
 import PropTypes from "prop-types";
 
+// Decode HTML entities (e.g. &lt;i&gt; → <i>) then strip all tags to plain text.
+// Paper titles from Europe PMC often contain HTML markup for species names.
+function cleanTitle(raw) {
+  if (!raw) return "";
+  const ta = document.createElement("textarea");
+  ta.innerHTML = raw;
+  return ta.value.replace(/<[^>]+>/g, "");
+}
+
 // ─────────────────────────────────────────────────
 // Data constants (APPL-specific)
 // ─────────────────────────────────────────────────
@@ -200,8 +209,8 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
             {paperUrl ? (
               <a href={paperUrl} target="_blank" rel="noreferrer"
                 style={{ color: "inherit", textDecoration: "none" }}
-              >{paper.title} <span style={{ fontSize: 10, opacity: 0.5 }}>↗</span></a>
-            ) : paper.title}
+              >{cleanTitle(paper.title)} <span style={{ fontSize: 10, opacity: 0.5 }}>↗</span></a>
+            ) : cleanTitle(paper.title)}
           </h4>
           <div style={S.pMeta}>
             <span>{paper.authors.join(", ")}</span>
@@ -798,7 +807,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
                 <div style={{ marginTop: 14 }}>
                   {anchorResults.map((r) => (
                     <div key={r.paper_id} style={{ ...S.comboCard, marginBottom: 8 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0", marginBottom: 4 }}>{r.title}</div>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0", marginBottom: 4 }}>{cleanTitle(r.title)}</div>
                       <div style={{ fontSize: 11, color: "#64748b" }}>{r.journal} {r.doi && `· ${r.doi}`} · similarity {(r.similarity * 100).toFixed(0)}%</div>
                       <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>{r.abstract_snippet}</div>
                     </div>
