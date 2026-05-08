@@ -70,6 +70,15 @@ for _port in "$API_PORT" "$CHAINLIT_PORT"; do
     fi
 done
 
+# ── Install / refresh frontend dependencies ──────────────────────────────────
+echo "Installing frontend dependencies..."
+(cd "$SCRIPT_DIR/frontend" && npm install --silent) || {
+    echo "ERROR: npm install failed in frontend/. Check Node.js version (≥18 required)."
+    exit 1
+}
+# WSL may strip execute bits from node_modules binaries depending on mount options.
+chmod -R +x "$SCRIPT_DIR/frontend/node_modules/.bin/" 2>/dev/null || true
+
 # ── Pre-load embedding model ─────────────────────────────────────────────────
 cassiopeia-preload || echo "WARNING: could not pre-load embedding model — will retry at startup."
 
