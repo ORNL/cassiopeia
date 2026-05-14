@@ -674,9 +674,28 @@ function searchButtonLabel(scanning, isReady, count) {
   return "⏳ Waiting for Agent...";
 }
 
-function filterPapers(papers, credF, showNewOnly, newPaperIds) {
-  const base = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
-  return showNewOnly ? base.filter((p) => newPaperIds.has(p.paper_id)) : base;
+const CRED_ORDER = { high: 4, moderate: 3, preliminary: 2, conflicting: 1 };
+
+const SORT_OPTIONS = [
+  { key: "overall",           label: "Best Match" },
+  { key: "recency",           label: "Recency" },
+  { key: "species_match",     label: "Species" },
+  { key: "stress_match",      label: "Stress" },
+  { key: "novelty",           label: "Novelty" },
+  { key: "credibility_level", label: "Credibility" },
+];
+
+const PAGE_SIZES = [10, 20, 50, 100];
+
+function filterAndSortPapers(papers, credF, showNewOnly, newPaperIds, sortKey) {
+  let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
+  if (showNewOnly) result = result.filter((p) => newPaperIds.has(p.paper_id));
+  if (sortKey === "overall") return result; // already sorted by relevance score
+  return [...result].sort((a, b) => {
+    if (sortKey === "credibility_level")
+      return (CRED_ORDER[b.credibility_level] ?? 0) - (CRED_ORDER[a.credibility_level] ?? 0);
+    return (b.scores[sortKey] ?? 0) - (a.scores[sortKey] ?? 0);
+  });
 }
 
 function formatTimeRange(months) {
@@ -820,6 +839,9 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [anchorLoading, setAnchorLoading] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [credF, setCredF] = useState("all");
+  const [sortKey, setSortKey] = useState("overall");
+  const [pageSize, setPageSize] = useState(20);
+  const [page, setPage] = useState(0);
   const [showNewOnly, setShowNewOnly] = useState(false);
   const [newPaperIds, setNewPaperIds] = useState(new Set());
   const [newSince, setNewSince] = useState(null);
@@ -876,6 +898,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
           setSynthesisPaperMeta(d.synthesis_paper_meta || {});
           setCombos(d.combos || []);
           setRagCombos(d.rag_combos || []);
+          setPage(0);
         }
       })
       .catch(() => {});
@@ -966,7 +989,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
         priority_reproducibility: priorities.reproducibility,
         time_range_months: timeRange,
         source_targets: sources,
-        limit: 20,
+        limit: 200,
         with_critique: scanSettings.withCritique,
         max_iterations: scanSettings.maxIterations,
       });
@@ -975,6 +998,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
       setContradictions([]);
+      setPage(0);
       setTab("results");
       fetch(`/api/sessions/${RESEARCHER_ID}`).then((r) => r.ok ? r.json() : []).then(setSessions).catch(() => {});
       // Contradiction detection runs in the background — poll until results arrive.
@@ -998,8 +1022,17 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings]);
 
   const filtered = useMemo(
-    () => filterPapers(papers, credF, showNewOnly, newPaperIds),
-    [papers, credF, showNewOnly, newPaperIds],
+    () => filterAndSortPapers(papers, credF, showNewOnly, newPaperIds, sortKey),
+    [papers, credF, showNewOnly, newPaperIds, sortKey],
+  );
+
+  useEffect(() => { setPage(0); }, [credF, sortKey, pageSize, showNewOnly]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage  = Math.min(page, pageCount - 1);
+  const paged     = useMemo(
+    () => filtered.slice(safePage * pageSize, (safePage + 1) * pageSize),
+    [filtered, safePage, pageSize],
   );
 
   const isAgentReady = agentStatus?.status === "running";
@@ -1179,6 +1212,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
             {papers.length === 0 ? (
               <div style={S.empty}><span style={{ fontSize: 48 }}>📚</span><p style={{ color: "#94a3b8", marginTop: 12 }}>No results yet. Configure your profile and run a literature scan.</p></div>
             ) : (<>
+              {/* Filter row */}
               <div style={S.fBar}>
                 <span style={S.fLabel}>Credibility:</span>
                 {["all", "high", "moderate", "preliminary", "conflicting"].map((f) => (
@@ -1195,11 +1229,38 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
                     🆕 New ({newInResults})
                   </button>
                 )}
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "#4b5563" }}>{filtered.length} papers</span>
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "#4b5563" }}>
+                  {filtered.length === papers.length ? papers.length : `${filtered.length} / ${papers.length}`} papers
+                </span>
               </div>
-              {filtered.map((p) => (
-                <PaperCard key={p.rank} paper={p} expanded={expPaper === p.rank} onToggle={() => setExpPaper(expPaper === p.rank ? null : p.rank)} isNew={newPaperIds.has(p.paper_id)} />
+              {/* Sort + page-size row */}
+              <div style={{ ...S.fBar, marginBottom: 16 }}>
+                <span style={S.fLabel}>Sort:</span>
+                {SORT_OPTIONS.map((o) => (
+                  <button key={o.key} onClick={() => setSortKey(o.key)} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
+                    {o.label}
+                  </button>
+                ))}
+                <span style={{ ...S.fLabel, marginLeft: "auto" }}>Per page:</span>
+                {PAGE_SIZES.map((n) => (
+                  <button key={n} onClick={() => setPageSize(n)} style={{ ...S.fBtn, ...(pageSize === n ? S.fOn : {}) }}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              {paged.map((p) => (
+                <PaperCard key={p.paper_id || p.rank} paper={p} expanded={expPaper === (p.paper_id || p.rank)} onToggle={() => { const k = p.paper_id || p.rank; setExpPaper(expPaper === k ? null : k); }} isNew={newPaperIds.has(p.paper_id)} />
               ))}
+              {/* Pagination */}
+              {pageCount > 1 && (
+                <div style={S.pgBar}>
+                  <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
+                    style={{ ...S.pgBtn, ...(safePage === 0 ? S.pgBtnDis : {}) }}>← Prev</button>
+                  <span style={S.pgInfo}>Page {safePage + 1} of {pageCount}</span>
+                  <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={safePage === pageCount - 1}
+                    style={{ ...S.pgBtn, ...(safePage === pageCount - 1 ? S.pgBtnDis : {}) }}>Next →</button>
+                </div>
+              )}
             </>)}
           </div>
         )}
@@ -1342,6 +1403,10 @@ const S = {
   fOn: { background: "#164e3f", borderColor: "#4ade80", color: "#4ade80" },
   fNew: { borderColor: "#7c3aed", color: "#a78bfa" },
   fNewOn: { background: "#1e1033", borderColor: "#7c3aed", color: "#a78bfa" },
+  pgBar: { display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginTop: 20, paddingTop: 16, borderTop: "1px solid #1e293b" },
+  pgBtn: { padding: "6px 16px", borderRadius: 8, border: "1px solid #334155", background: "#1e293b", color: "#94a3b8", fontSize: 12, cursor: "pointer" },
+  pgBtnDis: { opacity: 0.35, cursor: "not-allowed" },
+  pgInfo: { fontSize: 12, color: "#64748b", minWidth: 90, textAlign: "center" },
   newBadge: { display: "inline-block", fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "2px 6px", borderRadius: 8, background: "#1e1033", border: "1px solid #7c3aed", color: "#a78bfa", marginRight: 6, verticalAlign: "middle" },
 
   pCard: { background: "#111827", border: "1px solid #1e293b", borderRadius: 10, padding: 16, marginBottom: 10, cursor: "pointer", transition: "border-color 0.2s" },

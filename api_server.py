@@ -518,7 +518,7 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
     scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
 
     papers: list[dict[str, Any]] = []
-    for i, sp in enumerate(scored[:20]):
+    for i, sp in enumerate(scored):
         papers.append({
             "rank": i + 1,
             "paper_id": sp.paper.paper_id,
@@ -556,9 +556,9 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
                     "source_doi": p["doi"],
                     "paper_credibility": p["credibility_level"],
                 })
-            if len(combos) >= 10:
+            if len(combos) >= 50:
                 break
-        if len(combos) >= 10:
+        if len(combos) >= 50:
             break
 
     rag_combos = _paper_store.get_last_proposals(researcher_id)
