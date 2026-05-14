@@ -1184,13 +1184,25 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               <div style={S.card}>
                 <h3 style={S.cardH}>Previous Sessions</h3>
                 <p style={S.cardSub}>Recent searches for this profile</p>
-                {sessions.slice(0, 8).map((s) => (
-                  <div key={s.session_id} style={S.sessionRow}>
-                    <span style={S.sessionDate}>{s.timestamp.slice(0, 16).replace("T", " ")}</span>
-                    <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
-                    <span style={{ fontSize: 11, color: "#475569" }}>{(s.profile.plant_species || []).join(", ")}</span>
-                  </div>
-                ))}
+                {sessions.slice(0, 8).map((s) => {
+                  const p = s.profile;
+                  const months = p.time_range_months;
+                  const rangeLabel = months ? (months < 12 ? `${months} mo` : `${Math.round(months / 12)} yr`) : null;
+                  return (
+                    <div key={s.session_id} style={S.sessionRow}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
+                        <span style={S.sessionDate}>{s.timestamp.slice(0, 16).replace("T", " ")}</span>
+                        <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
+                      </div>
+                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
+                        {(p.plant_species || []).map((v) => <span key={v} style={S.sesChip}>{v}</span>)}
+                        {(p.stress_types || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipStress }}>{v}</span>)}
+                        {(p.source_targets || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipSrc }}>{v}</span>)}
+                        {rangeLabel && <span style={{ ...S.sesChip, ...S.sesChipRange }}>{rangeLabel}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
@@ -1459,9 +1471,13 @@ const S = {
   rateBtnUp: { borderColor: "#4ade80", background: "#0a1f12", opacity: 1 },
   rateBtnDown: { borderColor: "#f87171", background: "#1a0808", opacity: 1 },
 
-  sessionRow: { display: "flex", alignItems: "center", gap: 16, padding: "8px 0", borderBottom: "1px solid #1e293b", flexWrap: "wrap" },
+  sessionRow: { display: "flex", flexDirection: "column", gap: 6, padding: "10px 0", borderBottom: "1px solid #1e293b" },
   sessionDate: { fontSize: 12, color: "#64748b", fontVariantNumeric: "tabular-nums", minWidth: 130 },
   sessionMeta: { fontSize: 12, color: "#94a3b8", fontWeight: 600 },
+  sesChip: { fontSize: 10, padding: "2px 7px", borderRadius: 8, border: "1px solid #2d3f55", background: "#0f2033", color: "#7dd3fc" },
+  sesChipStress: { borderColor: "#3d2d1a", background: "#1a1008", color: "#fdba74" },
+  sesChipSrc: { borderColor: "#1e3a2a", background: "#0a1a12", color: "#6ee7b7" },
+  sesChipRange: { borderColor: "#2d2060", background: "#0f0b2a", color: "#a78bfa" },
 
   critiqueToggle: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#94a3b8", cursor: "pointer", marginBottom: 10 },
   critiqueSection: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px" },

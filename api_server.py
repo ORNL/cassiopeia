@@ -435,6 +435,8 @@ async def search(req: SearchRequest) -> dict[str, Any]:
                 "stress_types": req.stress_types,
                 "phenotyping_methods": req.phenotyping_methods,
                 "expertise_keywords": req.expertise_keywords,
+                "source_targets": req.source_targets,
+                "time_range_months": req.time_range_months,
             },
             n_papers=len(papers),
             n_proposals=len(rag_combos) + len(combos),
