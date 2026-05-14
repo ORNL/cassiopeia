@@ -375,16 +375,27 @@ class PaperStore:
         self._conn.commit()
 
     def get_last_proposals(self, researcher_id: str) -> list[dict]:
-        """Return the rag_combos from the researcher's most recent session."""
-        row = self._conn.execute(
+        """Return all accumulated rag_combos across sessions, deduplicated by proposal_id.
+
+        Proposals from newer sessions appear first. Within the same proposal_id the
+        most-recent version (from the latest session) wins so that ratings and
+        annotations stay up-to-date without duplicates.
+        """
+        rows = self._conn.execute(
             """SELECT proposals_snap FROM sessions
                WHERE researcher_id = ? AND proposals_snap IS NOT NULL
-               ORDER BY timestamp DESC LIMIT 1""",
+               ORDER BY timestamp DESC""",
             (researcher_id,),
-        ).fetchone()
-        if row and row["proposals_snap"]:
-            return json.loads(row["proposals_snap"])
-        return []
+        ).fetchall()
+        seen: set[str] = set()
+        merged: list[dict] = []
+        for row in rows:
+            for p in json.loads(row["proposals_snap"]):
+                pid = p.get("proposal_id") or p.get("suggestion", "")
+                if pid not in seen:
+                    seen.add(pid)
+                    merged.append(p)
+        return merged
 
     def get_sessions(self, researcher_id: str, limit: int = 20) -> list[dict]:
         rows = self._conn.execute(
