@@ -345,6 +345,59 @@ def _schedule_contradictions(researcher_id: str) -> None:
     _agent_ctx.run(_bg)
 
 
+def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]:
+    """Load all stored papers for a researcher, sorted by relevance, plus per-paper combos.
+
+    Bypasses the agent's in-memory limit so the full accumulated library is
+    always returned regardless of what ``limit`` was set at search time.
+    """
+    if _paper_store is None:
+        return [], []
+    scored = _paper_store.load_papers(researcher_id)
+    if not scored:
+        return [], []
+    scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
+    papers: list[dict[str, Any]] = []
+    for i, sp in enumerate(scored):
+        papers.append({
+            "rank": i + 1,
+            "paper_id": sp.paper.paper_id,
+            "title": sp.paper.title,
+            "authors": sp.paper.authors[:3],
+            "journal": sp.paper.journal,
+            "doi": sp.paper.doi,
+            "url": sp.paper.url,
+            "published": sp.paper.published_date.isoformat() if sp.paper.published_date else None,
+            "source": sp.paper.source.value,
+            "is_open_access": sp.paper.is_open_access,
+            "scores": {
+                "overall": round(sp.relevance.overall, 3),
+                "species_match": round(sp.relevance.species_match, 3),
+                "stress_match": round(sp.relevance.stress_match, 3),
+                "method_match": round(sp.relevance.method_match, 3),
+                "recency": round(sp.relevance.recency, 3),
+                "credibility": round(sp.relevance.credibility, 3),
+                "novelty": round(sp.relevance.novelty, 3),
+            },
+            "credibility_level": sp.credibility.value,
+            "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
+            "suggested_combinations": sp.suggested_combinations,
+        })
+    seen: set[str] = set()
+    combos: list[dict[str, Any]] = []
+    for p in papers:
+        for suggestion in p.get("suggested_combinations", []):
+            if suggestion not in seen:
+                seen.add(suggestion)
+                combos.append({
+                    "suggestion": suggestion,
+                    "source_paper": p["title"],
+                    "source_doi": p["doi"],
+                    "paper_credibility": p["credibility_level"],
+                })
+    return papers, combos
+
+
 def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
     """Collect title/DOI metadata for every paper referenced in proposals.
 
@@ -411,13 +464,11 @@ async def search(req: SearchRequest) -> dict[str, Any]:
     logger.info("Triggering search…")
     search_result = await _call(_mining_handle.trigger_search(req.researcher_id))
 
-    _set_progress(req.researcher_id, "fetching", "Selecting top-ranked papers…", 42)
+    _set_progress(req.researcher_id, "fetching", "Loading ranked papers…", 42)
     await asyncio.sleep(0)
-    logger.info("Search done: %s — fetching top papers…", search_result)
-    papers = await _call(_mining_handle.get_top_papers(req.researcher_id, limit=req.limit))
-    logger.info("Got %d papers — fetching combinations…", len(papers))
-    combos = await _call(_mining_handle.get_combinations(req.researcher_id))
-    logger.info("Got %d combinations", len(combos))
+    logger.info("Search done: %s — loading all ranked papers from store…", search_result)
+    papers, combos = _load_papers_and_combos(req.researcher_id)
+    logger.info("Got %d papers, %d combinations", len(papers), len(combos))
 
     rag_combos: list = []
     if _rag_handle is not None:
@@ -509,61 +560,10 @@ async def get_contradictions(researcher_id: str) -> list[dict]:
 @app.get("/api/researcher/{researcher_id}/results")
 async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
     """Return the last persisted papers and proposals for session restore."""
-    empty: dict[str, Any] = {"papers": [], "combos": [], "rag_combos": [], "synthesis_paper_meta": {}}
-    if _paper_store is None:
-        return empty
-
-    scored = _paper_store.load_papers(researcher_id)
-    if not scored:
-        return empty
-
-    scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
-
-    papers: list[dict[str, Any]] = []
-    for i, sp in enumerate(scored):
-        papers.append({
-            "rank": i + 1,
-            "paper_id": sp.paper.paper_id,
-            "title": sp.paper.title,
-            "authors": sp.paper.authors[:3],
-            "journal": sp.paper.journal,
-            "doi": sp.paper.doi,
-            "url": sp.paper.url,
-            "published": sp.paper.published_date.isoformat() if sp.paper.published_date else None,
-            "source": sp.paper.source.value,
-            "is_open_access": sp.paper.is_open_access,
-            "scores": {
-                "overall": round(sp.relevance.overall, 3),
-                "species_match": round(sp.relevance.species_match, 3),
-                "stress_match": round(sp.relevance.stress_match, 3),
-                "method_match": round(sp.relevance.method_match, 3),
-                "recency": round(sp.relevance.recency, 3),
-                "credibility": round(sp.relevance.credibility, 3),
-                "novelty": round(sp.relevance.novelty, 3),
-            },
-            "credibility_level": sp.credibility.value,
-            "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
-            "suggested_combinations": sp.suggested_combinations,
-        })
-
-    seen: set[str] = set()
-    combos: list[dict[str, Any]] = []
-    for p in papers:
-        for suggestion in p.get("suggested_combinations", []):
-            if suggestion not in seen:
-                seen.add(suggestion)
-                combos.append({
-                    "suggestion": suggestion,
-                    "source_paper": p["title"],
-                    "source_doi": p["doi"],
-                    "paper_credibility": p["credibility_level"],
-                })
-            if len(combos) >= 50:
-                break
-        if len(combos) >= 50:
-            break
-
-    rag_combos = _paper_store.get_last_proposals(researcher_id)
+    papers, combos = _load_papers_and_combos(researcher_id)
+    if not papers:
+        return {"papers": [], "combos": [], "rag_combos": [], "synthesis_paper_meta": {}}
+    rag_combos = _paper_store.get_last_proposals(researcher_id) if _paper_store else []
     return {
         "papers": papers,
         "combos": combos,

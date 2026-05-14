@@ -709,6 +709,25 @@ function comboTabLabel(ragCombos, combos) {
   return count ? `Combinations (${count})` : "Combinations";
 }
 
+function formatSessionMonths(months) {
+  if (!months) return null;
+  return months < 12 ? `${months} mo` : `${Math.round(months / 12)} yr`;
+}
+
+function pollForContradictions(researcherId, onResult) {
+  let attempts = 0;
+  const pollId = setInterval(() => {
+    attempts++;
+    fetch(`/api/contradictions/${researcherId}`)
+      .then((r) => r.ok ? r.json() : [])
+      .then((c) => {
+        if (c.length > 0) { onResult(c); clearInterval(pollId); }
+        else if (attempts >= 12) clearInterval(pollId);
+      })
+      .catch(() => { if (attempts >= 12) clearInterval(pollId); });
+  }, 5000);
+}
+
 // ─────────────────────────────────────────────────
 // Progress modal (polls scan stage every 600 ms)
 // ─────────────────────────────────────────────────
@@ -989,7 +1008,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
         priority_reproducibility: priorities.reproducibility,
         time_range_months: timeRange,
         source_targets: sources,
-        limit: 200,
         with_critique: scanSettings.withCritique,
         max_iterations: scanSettings.maxIterations,
       });
@@ -1001,18 +1019,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setPage(0);
       setTab("results");
       fetch(`/api/sessions/${RESEARCHER_ID}`).then((r) => r.ok ? r.json() : []).then(setSessions).catch(() => {});
-      // Contradiction detection runs in the background — poll until results arrive.
-      let attempts = 0;
-      const pollId = setInterval(() => {
-        attempts++;
-        fetch(`/api/contradictions/${RESEARCHER_ID}`)
-          .then((r) => r.ok ? r.json() : [])
-          .then((c) => {
-            if (c.length > 0) { setContradictions(c); clearInterval(pollId); }
-            else if (attempts >= 12) clearInterval(pollId);
-          })
-          .catch(() => { if (attempts >= 12) clearInterval(pollId); });
-      }, 5000);
+      pollForContradictions(RESEARCHER_ID, setContradictions);
     } catch (err) {
       setSearchError(err.message);
       setShowProgress(false);
@@ -1187,7 +1194,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
                 {sessions.slice(0, 8).map((s) => {
                   const p = s.profile;
                   const months = p.time_range_months;
-                  const rangeLabel = months ? (months < 12 ? `${months} mo` : `${Math.round(months / 12)} yr`) : null;
+                  const rangeLabel = formatSessionMonths(months);
                   return (
                     <div key={s.session_id} style={S.sessionRow}>
                       <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
