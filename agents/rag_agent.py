@@ -341,9 +341,10 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             model=self._chat_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=2500,
+            max_tokens=4000,
             response_format={"type": "json_object"},
             temperature=0.4,
+            timeout=180,
         )
         raw = response.choices[0].message.content.strip()
         if raw.startswith("```"):
@@ -710,10 +711,10 @@ class RAGAgent(Agent):
             response = await litellm.acompletion(
                 model=scoring_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
+                max_tokens=400,
                 response_format={"type": "json_object"},
                 temperature=0.0,
-                timeout=15,
+                timeout=60,
             )
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):
@@ -883,9 +884,10 @@ class RAGAgent(Agent):
             response = await litellm.acompletion(
                 model=self._chat_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
+                max_tokens=600,
                 response_format={"type": "json_object"},
                 temperature=0.1,
+                timeout=120,
             )
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):
@@ -939,9 +941,10 @@ class RAGAgent(Agent):
             response = await litellm.acompletion(
                 model=self._chat_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=800,
+                max_tokens=1200,
                 response_format={"type": "json_object"},
                 temperature=0.2,
+                timeout=150,
             )
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):
@@ -1103,7 +1106,8 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             model=self._chat_model,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=600,
+            max_tokens=800,
             temperature=0.3,
+            timeout=120,
         )
         return response.choices[0].message.content

@@ -186,10 +186,10 @@ async def critique_proposal(
             response = await litellm.acompletion(
                 model=_model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=800,
+                max_tokens=1500,
                 response_format={"type": "json_object"},
                 temperature=0.3,
-                timeout=30,
+                timeout=120,
             )
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):

@@ -345,6 +345,33 @@ def _schedule_contradictions(researcher_id: str) -> None:
     _agent_ctx.run(_bg)
 
 
+_SPECIES_TERMS: dict[str, list[str]] = {
+    "poplar":       ["poplar", "populus"],
+    "pennycress":   ["pennycress", "thlaspi"],
+    "arabidopsis":  ["arabidopsis"],
+    "soybean":      ["soybean", "glycine max"],
+    "sorghum":      ["sorghum"],
+    "switchgrass":  ["switchgrass", "panicum virgatum"],
+    "miscanthus":   ["miscanthus"],
+    "brachypodium": ["brachypodium"],
+}
+
+_STRESS_TERMS: dict[str, list[str]] = {
+    "drought":      ["drought", "water deficit", "water stress", "osmotic stress"],
+    "nutrient":     ["nutrient", "nitrogen", "phosphorus", "fertiliz"],
+    "temperature":  ["temperature", "heat stress", "cold stress", "thermotoler"],
+    "pathogen":     ["pathogen", "disease resistance", "fungal", "bacterial"],
+    "heavy_metal":  ["heavy metal", "cadmium", "zinc toxicity", "metal stress"],
+    "salinity":     ["salin", "salt stress", "nacl"],
+    "light":        ["light stress", "photoinhibition", "shade", "photoperiod"],
+    "flooding":     ["flood", "waterlog", "submerg", "anaerobic"],
+}
+
+
+def _match_terms(haystack: str, key: str, term_map: dict[str, list[str]]) -> bool:
+    return any(t in haystack for t in term_map.get(key, [key]))
+
+
 def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]:
     """Load all stored papers for a researcher, sorted by relevance, plus per-paper combos.
 
@@ -359,6 +386,11 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
     scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
     papers: list[dict[str, Any]] = []
     for i, sp in enumerate(scored):
+        haystack = " ".join(filter(None, [
+            sp.paper.title,
+            sp.paper.abstract,
+            " ".join(sp.paper.keywords or []),
+        ])).lower()
         papers.append({
             "rank": i + 1,
             "paper_id": sp.paper.paper_id,
@@ -382,6 +414,8 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
             "credibility_level": sp.credibility.value,
             "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
             "suggested_combinations": sp.suggested_combinations,
+            "matched_species":  [s  for s  in _SPECIES_TERMS if _match_terms(haystack, s,  _SPECIES_TERMS)],
+            "matched_stresses": [st for st in _STRESS_TERMS  if _match_terms(haystack, st, _STRESS_TERMS)],
         })
     seen: set[str] = set()
     combos: list[dict[str, Any]] = []
@@ -472,7 +506,10 @@ async def search(req: SearchRequest) -> dict[str, Any]:
 
     rag_combos: list = []
     if _rag_handle is not None:
-        rag_combos = await _run_rag_synthesis(req, equipment)
+        try:
+            rag_combos = await asyncio.wait_for(_run_rag_synthesis(req, equipment), timeout=600)
+        except asyncio.TimeoutError:
+            logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
         _contradictions_store.pop(req.researcher_id, None)
         _schedule_contradictions(req.researcher_id)
 

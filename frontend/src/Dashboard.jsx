@@ -677,20 +677,21 @@ function searchButtonLabel(scanning, isReady, count) {
 const CRED_ORDER = { high: 4, moderate: 3, preliminary: 2, conflicting: 1 };
 
 const SORT_OPTIONS = [
-  { key: "overall",           label: "Best Match" },
-  { key: "recency",           label: "Recency" },
-  { key: "species_match",     label: "Species" },
-  { key: "stress_match",      label: "Stress" },
-  { key: "novelty",           label: "Novelty" },
-  { key: "credibility_level", label: "Credibility" },
+  { key: "overall",           label: "Profile Score", title: "Weighted combination of relevance, novelty, method fit and credibility — weights set in Priority Settings" },
+  { key: "recency",           label: "Recency",       title: "How recently the paper was published" },
+  { key: "novelty",           label: "Novelty",       title: "How novel the paper's approach is relative to your knowledge base" },
+  { key: "method_match",      label: "Method Fit",    title: "How well the paper's methods match your available instruments" },
+  { key: "credibility_level", label: "Credibility",   title: "Journal credibility and study design quality" },
 ];
 
 const PAGE_SIZES = [10, 20, 50, 100];
 
-function filterAndSortPapers(papers, credF, showNewOnly, newPaperIds, sortKey) {
+function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey) {
   let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
+  if (speciesF !== "all") result = result.filter((p) => (p.matched_species || []).includes(speciesF));
+  if (stressF  !== "all") result = result.filter((p) => (p.matched_stresses || []).includes(stressF));
   if (showNewOnly) result = result.filter((p) => newPaperIds.has(p.paper_id));
-  if (sortKey === "overall") return result; // already sorted by relevance score
+  if (sortKey === "overall") return result;
   return [...result].sort((a, b) => {
     if (sortKey === "credibility_level")
       return (CRED_ORDER[b.credibility_level] ?? 0) - (CRED_ORDER[a.credibility_level] ?? 0);
@@ -726,6 +727,69 @@ function pollForContradictions(researcherId, onResult) {
       })
       .catch(() => { if (attempts >= 12) clearInterval(pollId); });
   }, 5000);
+}
+
+function applyStoredProfile(profile, setSpecies, setStresses, setSources, setTimeRange) {
+  if (!profile) return;
+  if (profile.plant_species?.length)  setSpecies(profile.plant_species);
+  if (profile.stress_types?.length)   setStresses(profile.stress_types);
+  if (profile.source_targets?.length) setSources(profile.source_targets);
+  if (profile.time_range_months)      setTimeRange(profile.time_range_months);
+}
+
+async function fetchKeywords(text) {
+  const res = await fetch("/api/extract_keywords", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) return [];
+  return (await res.json()).keywords || [];
+}
+
+function startAgentPolling(setter) {
+  async function poll() {
+    try {
+      const res = await fetch("/api/status");
+      if (res.ok) setter(await res.json());
+    } catch { /* silent */ }
+  }
+  poll();
+  return setInterval(poll, 10_000);
+}
+
+async function loadAndApplyProfile(researcherId, setSpecies, setStresses, setSources, setTimeRange) {
+  try {
+    const r = await fetch(`/api/researcher/${researcherId}`);
+    if (r.ok) applyStoredProfile(await r.json(), setSpecies, setStresses, setSources, setTimeRange);
+  } catch { /* silent */ }
+}
+
+async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos, setPage) {
+  try {
+    const r = await fetch(`/api/researcher/${researcherId}/results`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d?.papers?.length > 0) {
+      setPapers(d.papers);
+      setSynthesisPaperMeta(d.synthesis_paper_meta || {});
+      setCombos(d.combos || []);
+      setRagCombos(d.rag_combos || []);
+      setPage(0);
+    }
+  } catch { /* silent */ }
+}
+
+async function loadNewPapers(researcherId, setNewPaperIds, setNewSince) {
+  try {
+    const r = await fetch(`/api/researcher/${researcherId}/new-papers`);
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d?.new_count > 0) {
+      setNewPaperIds(new Set(d.new_papers.map((p) => p.paper_id)));
+      setNewSince(d.new_since);
+    }
+  } catch { /* silent */ }
 }
 
 // ─────────────────────────────────────────────────
@@ -858,6 +922,8 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [anchorLoading, setAnchorLoading] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [credF, setCredF] = useState("all");
+  const [speciesF, setSpeciesF] = useState("all");
+  const [stressF, setStressF] = useState("all");
   const [sortKey, setSortKey] = useState("overall");
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(0);
@@ -868,72 +934,27 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
   const RESEARCHER_ID = researcherId || "researcher_001";
 
-  const refreshSessions = useCallback(() => {
-    fetch(`/api/sessions/${RESEARCHER_ID}`)
-      .then((r) => r.ok ? r.json() : [])
-      .then(setSessions)
-      .catch(() => {});
-  }, []);
+  const refreshSessions = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/sessions/${RESEARCHER_ID}`);
+      if (r.ok) setSessions(await r.json());
+    } catch { /* silent */ }
+  }, [RESEARCHER_ID]);
 
   // Poll agent status every 10 seconds
   useEffect(() => {
-    const poll = async () => {
-      try {
-        const res = await fetch("/api/status");
-        if (res.ok) setAgentStatus(await res.json());
-      } catch {
-        // backend not reachable yet
-      }
-    };
-    poll();
-    const id = setInterval(poll, 10_000);
+    const id = startAgentPolling(setAgentStatus);
     return () => clearInterval(id);
   }, []);
 
   // Load session history
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
-  // Restore profile form fields from the last saved profile
+  // Restore profile, last results, and new-paper markers on mount
   useEffect(() => {
-    fetch(`/api/researcher/${RESEARCHER_ID}`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((profile) => {
-        if (!profile) return;
-        if (profile.plant_species?.length)  setSpecies(profile.plant_species);
-        if (profile.stress_types?.length)   setStresses(profile.stress_types);
-        if (profile.source_targets?.length) setSources(profile.source_targets);
-        if (profile.time_range_months)      setTimeRange(profile.time_range_months);
-      })
-      .catch(() => {});
-  }, [RESEARCHER_ID]);
-
-  // Restore last search results on mount
-  useEffect(() => {
-    fetch(`/api/researcher/${RESEARCHER_ID}/results`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        if (d && d.papers.length > 0) {
-          setPapers(d.papers);
-          setSynthesisPaperMeta(d.synthesis_paper_meta || {});
-          setCombos(d.combos || []);
-          setRagCombos(d.rag_combos || []);
-          setPage(0);
-        }
-      })
-      .catch(() => {});
-  }, [RESEARCHER_ID]);
-
-  // Fetch papers added since last login
-  useEffect(() => {
-    fetch(`/api/researcher/${RESEARCHER_ID}/new-papers`)
-      .then((r) => r.ok ? r.json() : null)
-      .then((d) => {
-        if (d && d.new_count > 0) {
-          setNewPaperIds(new Set(d.new_papers.map((p) => p.paper_id)));
-          setNewSince(d.new_since);
-        }
-      })
-      .catch(() => {});
+    loadAndApplyProfile(RESEARCHER_ID, setSpecies, setStresses, setSources, setTimeRange);
+    loadRestoredResults(RESEARCHER_ID, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos, setPage);
+    loadNewPapers(RESEARCHER_ID, setNewPaperIds, setNewSince);
   }, [RESEARCHER_ID]);
 
   const doAnchorSearch = useCallback(async () => {
@@ -957,15 +978,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
     if (!researchPrompt.trim() || kwLoading) return;
     setKwLoading(true);
     try {
-      const res = await fetch("/api/extract_keywords", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: researchPrompt }),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setExtractedKeywords(data.keywords || []);
-      }
+      setExtractedKeywords(await fetchKeywords(researchPrompt));
     } catch { /* silent */ } finally {
       setKwLoading(false);
     }
@@ -1018,7 +1031,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setContradictions([]);
       setPage(0);
       setTab("results");
-      fetch(`/api/sessions/${RESEARCHER_ID}`).then((r) => r.ok ? r.json() : []).then(setSessions).catch(() => {});
+      refreshSessions();
       pollForContradictions(RESEARCHER_ID, setContradictions);
     } catch (err) {
       setSearchError(err.message);
@@ -1026,14 +1039,19 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
     } finally {
       setSearching(false);
     }
-  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings]);
+  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions]);
 
   const filtered = useMemo(
-    () => filterAndSortPapers(papers, credF, showNewOnly, newPaperIds, sortKey),
-    [papers, credF, showNewOnly, newPaperIds, sortKey],
+    () => filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey),
+    [papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey],
   );
 
-  useEffect(() => { setPage(0); }, [credF, sortKey, pageSize, showNewOnly]);
+  const { availableSpecies, availableStresses } = useMemo(() => ({
+    availableSpecies:  [...new Set(papers.flatMap((p) => p.matched_species  || []))],
+    availableStresses: [...new Set(papers.flatMap((p) => p.matched_stresses || []))],
+  }), [papers]);
+
+  useEffect(() => { setPage(0); }, [credF, speciesF, stressF, sortKey, pageSize, showNewOnly]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage  = Math.min(page, pageCount - 1);
@@ -1252,11 +1270,35 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
                   {filtered.length === papers.length ? papers.length : `${filtered.length} / ${papers.length}`} papers
                 </span>
               </div>
+              {/* Species filter row */}
+              {availableSpecies.length > 0 && (
+                <div style={{ ...S.fBar, marginBottom: 8 }}>
+                  <span style={S.fLabel}>Species:</span>
+                  <button onClick={() => setSpeciesF("all")} style={{ ...S.fBtn, ...(speciesF === "all" ? S.fOn : {}) }}>All</button>
+                  {availableSpecies.map((s) => (
+                    <button key={s} onClick={() => setSpeciesF(s)} style={{ ...S.fBtn, ...(speciesF === s ? S.fOn : {}) }}>
+                      {s.charAt(0).toUpperCase() + s.slice(1)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {/* Stress filter row */}
+              {availableStresses.length > 0 && (
+                <div style={{ ...S.fBar, marginBottom: 8 }}>
+                  <span style={S.fLabel}>Stress:</span>
+                  <button onClick={() => setStressF("all")} style={{ ...S.fBtn, ...(stressF === "all" ? S.fOn : {}) }}>All</button>
+                  {availableStresses.map((s) => (
+                    <button key={s} onClick={() => setStressF(s)} style={{ ...S.fBtn, ...(stressF === s ? S.fOn : {}) }}>
+                      {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
+                    </button>
+                  ))}
+                </div>
+              )}
               {/* Sort + page-size row */}
               <div style={{ ...S.fBar, marginBottom: 16 }}>
                 <span style={S.fLabel}>Sort:</span>
                 {SORT_OPTIONS.map((o) => (
-                  <button key={o.key} onClick={() => setSortKey(o.key)} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
+                  <button key={o.key} onClick={() => setSortKey(o.key)} title={o.title} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
                     {o.label}
                   </button>
                 ))}
