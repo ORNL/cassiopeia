@@ -903,44 +903,21 @@ class RAGAgent(Agent):
                 "note": "Assessment unavailable.",
             }
 
-    @action
-    async def detect_contradictions(
-        self,
-        researcher_id: str,
-        n_papers: int = 10,
-    ) -> list[dict[str, Any]]:
-        """Find conflicting claims across the top retrieved papers.
-
-        Retrieves the most semantically central abstracts for the researcher's
-        query space and sends them together to an LLM that identifies
-        contradictory or conflicting findings.
-
-        Returns a list of dicts with keys:
-        ``papers``, ``claim_a``, ``claim_b``, ``resolution_hint``.
-        """
-        await self.index_new_papers()
-
-        if self._rag.count() == 0:
-            return []
-
-        where = {"researcher_id": researcher_id}
-        hits = self._rag.query(researcher_id, n_results=n_papers, where=where)
+    async def _contradiction_pass(
+        self, query: str, n_papers: int, where: dict
+    ) -> list[dict]:
+        """Run one contradiction-detection LLM call over papers matching ``query``."""
+        hits = self._rag.query(query, n_results=n_papers, where=where)
         if len(hits) < 2:
             return []
-
-        context_blocks = []
-        for i, hit in enumerate(hits, 1):
-            meta = self._store.get_paper_metadata(hit["paper_id"]) or {}
-            title = meta.get("title", "Unknown")
-            context_blocks.append(f"[Paper {i}] {title}\n{hit['document'][:500]}")
-
-        context = "\n\n".join(context_blocks)
-        prompt = _CONTRADICTION_PROMPT.format(n=len(hits), context=context)
-
+        context = "\n\n".join(
+            f"[Paper {i}] {(self._store.get_paper_metadata(h['paper_id']) or {}).get('title', 'Unknown')}\n{h['document'][:500]}"
+            for i, h in enumerate(hits, 1)
+        )
         try:
             response = await litellm.acompletion(
                 model=self._chat_model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[{"role": "user", "content": _CONTRADICTION_PROMPT.format(n=len(hits), context=context)}],
                 max_tokens=1200,
                 response_format={"type": "json_object"},
                 temperature=0.2,
@@ -951,8 +928,50 @@ class RAGAgent(Agent):
                 raw = raw.split("```")[1].lstrip("json").strip()
             return json.loads(raw).get("contradictions", [])
         except Exception as exc:
-            logger.warning("detect_contradictions failed: %s", exc)
+            logger.warning("detect_contradictions pass '%s' failed: %s", query, exc)
             return []
+
+    @action
+    async def detect_contradictions(
+        self,
+        researcher_id: str,
+        n_papers_per_pass: int = 20,
+        n_passes: int = 3,
+    ) -> list[dict[str, Any]]:
+        """Find conflicting claims across the researcher's paper corpus.
+
+        Runs ``n_passes`` LLM calls, each over a different semantically-focused
+        slice of ``n_papers_per_pass`` abstracts, then deduplicates the results.
+        Each pass uses a distinct query term derived from the researcher profile
+        so different parts of the corpus are sampled.
+
+        Returns a list of dicts with keys:
+        ``papers``, ``claim_a``, ``claim_b``, ``resolution_hint``.
+        """
+        await self.index_new_papers()
+
+        if self._rag.count() == 0:
+            return []
+
+        profile  = self._store.load_profile(researcher_id) or {}
+        terms    = (
+            list(profile.get("plant_species", []))
+            + [s.replace("_", " ") for s in profile.get("stress_types", [])]
+            + profile.get("expertise_keywords", [])[:4]
+        ) or ["plant biology stress response"]
+        queries  = (terms * n_passes)[:n_passes]
+        where    = {"researcher_id": researcher_id}
+
+        seen_pairs: set[frozenset] = set()
+        all_contradictions: list[dict] = []
+        for query in queries:
+            for c in await self._contradiction_pass(query, n_papers_per_pass, where):
+                pair = frozenset(c.get("papers", []))
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    all_contradictions.append(c)
+
+        return all_contradictions
 
     @action
     async def find_similar_to_anchor(
