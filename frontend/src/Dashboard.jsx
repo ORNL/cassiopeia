@@ -268,7 +268,7 @@ PaperCard.propTypes = {
 };
 
 // ─────────────────────────────────────────────────
-// CombosTab — theme-grouped proposals with feedback
+// ProposalsTab / HypothesesTab — paginated tabs with species+stress filters
 // ─────────────────────────────────────────────────
 
 const FEASIBILITY_STYLE = {
@@ -564,85 +564,184 @@ function RagComboCard({ c, rating, onRate, paperById }) {
 FeasibilityBadge.propTypes = { f: PropTypes.object };
 FeasibilityDetail.propTypes = { f: PropTypes.object };
 
-function CombosTab({ ragCombos, combos, ratings, onRate, papers, synthesisPaperMeta }) {
+RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object };
+
+const COMBO_PAGE_SIZES = [5, 10, 20, 50, 100];
+
+function filterCombos(items, speciesF, stressF) {
+  let out = items;
+  if (speciesF.length > 0) out = out.filter((c) => speciesF.some((s) => (c.matched_species  || []).includes(s)));
+  if (stressF.length  > 0) out = out.filter((c) => stressF.some( (s) => (c.matched_stresses || []).includes(s)));
+  return out;
+}
+
+function toggleTerm(arr, term) {
+  return arr.includes(term) ? arr.filter((x) => x !== term) : [...arr, term];
+}
+
+function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, pageSize, setPageSize, total, filtered }) {
+  const availSp = [...new Set(items.flatMap((c) => c.matched_species  || []))];
+  const availSt = [...new Set(items.flatMap((c) => c.matched_stresses || []))];
+  return (<>
+    {availSp.length > 0 && (
+      <div style={{ ...S.fBar, marginBottom: 8 }}>
+        <span style={S.fLabel}>Species:</span>
+        <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
+        {availSp.map((s) => (
+          <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
+            {s.charAt(0).toUpperCase() + s.slice(1)}
+          </button>
+        ))}
+      </div>
+    )}
+    {availSt.length > 0 && (
+      <div style={{ ...S.fBar, marginBottom: 8 }}>
+        <span style={S.fLabel}>Stress:</span>
+        <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
+        {availSt.map((s) => (
+          <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
+            {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
+          </button>
+        ))}
+      </div>
+    )}
+    <div style={{ ...S.fBar, marginBottom: 16 }}>
+      <span style={S.fLabel}>Per page:</span>
+      {COMBO_PAGE_SIZES.map((n) => (
+        <button key={n} onClick={() => setPageSize(n)} style={{ ...S.fBtn, ...(pageSize === n ? S.fOn : {}) }}>{n}</button>
+      ))}
+      <span style={{ marginLeft: "auto", fontSize: 12, color: "#4b5563" }}>
+        {filtered === total ? total : `${filtered} / ${total}`}
+      </span>
+    </div>
+  </>);
+}
+
+ComboFilterBar.propTypes = { items: PropTypes.array, speciesF: PropTypes.array, setSpeciesF: PropTypes.func, stressF: PropTypes.array, setStressF: PropTypes.func, pageSize: PropTypes.number, setPageSize: PropTypes.func, total: PropTypes.number, filtered: PropTypes.number };
+
+function ComboPagination({ page, setPage, pageCount }) {
+  if (pageCount <= 1) return null;
+  const safe = Math.min(page, pageCount - 1);
+  return (
+    <div style={S.pgBar}>
+      <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safe === 0}
+        style={{ ...S.pgBtn, ...(safe === 0 ? S.pgBtnDis : {}) }}>← Prev</button>
+      <span style={S.pgInfo}>Page {safe + 1} of {pageCount}</span>
+      <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={safe === pageCount - 1}
+        style={{ ...S.pgBtn, ...(safe === pageCount - 1 ? S.pgBtnDis : {}) }}>Next →</button>
+    </div>
+  );
+}
+
+ComboPagination.propTypes = { page: PropTypes.number, setPage: PropTypes.func, pageCount: PropTypes.number };
+
+function ProposalsTab({ ragCombos, ratings, onRate, papers, synthesisPaperMeta }) {
+  const [speciesF, setSpeciesF]   = useState([]);
+  const [stressF,  setStressF]    = useState([]);
+  const [pageSize, setPageSize]   = useState(10);
+  const [page,     setPage]       = useState(0);
+
   const paperById = useMemo(() => {
     const map = Object.fromEntries((papers || []).map((p) => [p.paper_id, p]));
-    // Merge in metadata for synthesis papers not in the top-N results list
     for (const [pid, meta] of Object.entries(synthesisPaperMeta || {})) {
       if (!map[pid]) map[pid] = meta;
     }
     return map;
   }, [papers, synthesisPaperMeta]);
 
-  const grouped = useMemo(() => {
-    const map = new Map();
-    for (const c of ragCombos) {
-      const key = c.theme || "Other";
-      if (!map.has(key)) map.set(key, []);
-      map.get(key).push(c);
-    }
-    return [...map.entries()];
-  }, [ragCombos]);
+  const filtered = useMemo(
+    () => filterCombos(ragCombos, speciesF, stressF),
+    [ragCombos, speciesF, stressF],
+  );
 
-  if (ragCombos.length === 0 && combos.length === 0) {
+  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safe      = Math.min(page, pageCount - 1);
+  const paged     = filtered.slice(safe * pageSize, (safe + 1) * pageSize);
+
+  if (ragCombos.length === 0) {
     return (
       <div style={S.empty}>
         <span style={{ fontSize: 48 }}>💡</span>
-        <p style={{ color: "#94a3b8", marginTop: 12 }}>No combination suggestions yet. Run a scan first.</p>
+        <p style={{ color: "#94a3b8", marginTop: 12 }}>No AI proposals yet. Run a scan first.</p>
       </div>
     );
   }
 
   return (
-    <div>
-      {grouped.length > 0 && (
-        <div style={{ ...S.card, marginBottom: 24 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-            <h3 style={S.cardH}>AI-Synthesised Proposals</h3>
-            <span style={S.ragBadge}>RAG · cross-paper</span>
-          </div>
-          <p style={S.cardSub}>Novel experiment designs reasoned over multiple papers together — grouped by research theme</p>
-          {grouped.map(([theme, items]) => (
-            <div key={theme}>
-              <div style={S.themeHeader}>{theme}</div>
-              {items.map((c) => (
-                <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} />
-              ))}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {combos.length > 0 && (
-        <div style={S.card}>
-          <h3 style={S.cardH}>Per-Paper Hypotheses</h3>
-          <p style={S.cardSub}>One-sentence ideas generated per paper during scoring — quick signals, not cross-paper reasoning</p>
-          {combos.map((c) => (
-            <div key={c.source_doi || c.suggestion} style={S.comboCard}>
-              <div style={{ fontSize: 14, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 8 }}>{c.suggestion}</div>
-              <div style={{ fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 6 }}>
-                <span>From:{" "}
-                  {c.source_doi ? (
-                    <a href={`https://doi.org/${c.source_doi}`} target="_blank" rel="noreferrer"
-                      style={{ color: "#22d3ee", textDecoration: "none", fontStyle: "italic" }}>
-                      {c.source_paper} <span style={{ opacity: 0.5 }}>↗</span>
-                    </a>
-                  ) : (
-                    <em>{c.source_paper}</em>
-                  )}
-                </span>
-                <span>{CREDIBILITY_ICONS[c.paper_credibility]} {c.paper_credibility}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+    <div style={S.card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <h3 style={S.cardH}>AI-Synthesized Proposals</h3>
+        <span style={S.ragBadge}>RAG · cross-paper</span>
+      </div>
+      <p style={S.cardSub}>Novel experiment designs reasoned over multiple papers together</p>
+      <ComboFilterBar items={ragCombos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={ragCombos.length} filtered={filtered.length} />
+      {paged.map((c) => (
+        <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} />
+      ))}
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
     </div>
   );
 }
 
-RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object };
-CombosTab.propTypes = { ragCombos: PropTypes.array, combos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
+ProposalsTab.propTypes = { ragCombos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
+
+function HypothesesTab({ combos }) {
+  const [speciesF, setSpeciesF]   = useState([]);
+  const [stressF,  setStressF]    = useState([]);
+  const [pageSize, setPageSize]   = useState(20);
+  const [page,     setPage]       = useState(0);
+
+  const filtered = useMemo(
+    () => filterCombos(combos, speciesF, stressF),
+    [combos, speciesF, stressF],
+  );
+
+  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safe      = Math.min(page, pageCount - 1);
+  const paged     = filtered.slice(safe * pageSize, (safe + 1) * pageSize);
+
+  if (combos.length === 0) {
+    return (
+      <div style={S.empty}>
+        <span style={{ fontSize: 48 }}>📝</span>
+        <p style={{ color: "#94a3b8", marginTop: 12 }}>No per-paper hypotheses yet. Run a scan first.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.card}>
+      <h3 style={S.cardH}>Per-Paper Hypotheses</h3>
+      <p style={S.cardSub}>One-sentence ideas generated per paper during scoring — quick signals, not cross-paper reasoning</p>
+      <ComboFilterBar items={combos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={combos.length} filtered={filtered.length} />
+      {paged.map((c) => (
+        <div key={c.source_doi || c.suggestion} style={S.comboCard}>
+          <div style={{ fontSize: 14, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 8 }}>{c.suggestion}</div>
+          <div style={{ fontSize: 12, color: "#64748b", display: "flex", alignItems: "center", gap: 6 }}>
+            <span>From:{" "}
+              {c.source_doi ? (
+                <a href={`https://doi.org/${c.source_doi}`} target="_blank" rel="noreferrer"
+                  style={{ color: "#22d3ee", textDecoration: "none", fontStyle: "italic" }}>
+                  {c.source_paper} <span style={{ opacity: 0.5 }}>↗</span>
+                </a>
+              ) : (
+                <em>{c.source_paper}</em>
+              )}
+            </span>
+            <span>{CREDIBILITY_ICONS[c.paper_credibility]} {c.paper_credibility}</span>
+          </div>
+        </div>
+      ))}
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
+    </div>
+  );
+}
+
+HypothesesTab.propTypes = { combos: PropTypes.array };
 
 // ─────────────────────────────────────────────────
 // Module-level helpers (excluded from Dashboard cognitive complexity)
@@ -688,8 +787,8 @@ const PAGE_SIZES = [10, 20, 50, 100];
 
 function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey) {
   let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
-  if (speciesF !== "all") result = result.filter((p) => (p.matched_species || []).includes(speciesF));
-  if (stressF  !== "all") result = result.filter((p) => (p.matched_stresses || []).includes(stressF));
+  if (speciesF.length > 0) result = result.filter((p) => speciesF.some((s) => (p.matched_species  || []).includes(s)));
+  if (stressF.length  > 0) result = result.filter((p) => stressF.some( (s) => (p.matched_stresses || []).includes(s)));
   if (showNewOnly) result = result.filter((p) => newPaperIds.has(p.paper_id));
   if (sortKey === "overall") return result;
   return [...result].sort((a, b) => {
@@ -705,10 +804,6 @@ function formatTimeRange(months) {
   return `${months} mo (${(months / 12).toFixed(decimals)} yr)`;
 }
 
-function comboTabLabel(ragCombos, combos) {
-  const count = ragCombos.length + combos.length;
-  return count ? `Combinations (${count})` : "Combinations";
-}
 
 function formatSessionMonths(months) {
   if (!months) return null;
@@ -922,8 +1017,8 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [anchorLoading, setAnchorLoading] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [credF, setCredF] = useState("all");
-  const [speciesF, setSpeciesF] = useState("all");
-  const [stressF, setStressF] = useState("all");
+  const [speciesF, setSpeciesF] = useState([]);
+  const [stressF, setStressF] = useState([]);
   const [sortKey, setSortKey] = useState("overall");
   const [pageSize, setPageSize] = useState(20);
   const [page, setPage] = useState(0);
@@ -1064,8 +1159,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
   const statusText = agentStatusText(agentStatus);
 
-  const comboLabel = comboTabLabel(ragCombos, combos);
-
   const timeRangeLabel = formatTimeRange(timeRange);
 
   const searchBtnLabel = searchButtonLabel(searching, isAgentReady, sources.length);
@@ -1108,9 +1201,10 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
       <nav style={S.tabBar}>
         {[
-          { id: "profile", label: "Research Profile", icon: "🧬" },
-          { id: "results", label: resultsLabel, icon: "📊" },
-          { id: "combos", label: comboLabel, icon: "💡" },
+          { id: "profile",     label: "Research Profile", icon: "🧬" },
+          { id: "results",     label: resultsLabel, icon: "📊" },
+          { id: "proposals",   label: ragCombos.length ? `AI Proposals (${ragCombos.length})` : "AI Proposals", icon: "💡" },
+          { id: "hypotheses",  label: combos.length ? `Hypotheses (${combos.length})` : "Hypotheses", icon: "📝" },
           { id: "contradictions", label: "Contradictions" + (contradictions.length ? ` (${contradictions.length})` : ""), icon: "⚠️" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
@@ -1274,9 +1368,9 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               {availableSpecies.length > 0 && (
                 <div style={{ ...S.fBar, marginBottom: 8 }}>
                   <span style={S.fLabel}>Species:</span>
-                  <button onClick={() => setSpeciesF("all")} style={{ ...S.fBtn, ...(speciesF === "all" ? S.fOn : {}) }}>All</button>
+                  <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
                   {availableSpecies.map((s) => (
-                    <button key={s} onClick={() => setSpeciesF(s)} style={{ ...S.fBtn, ...(speciesF === s ? S.fOn : {}) }}>
+                    <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
                       {s.charAt(0).toUpperCase() + s.slice(1)}
                     </button>
                   ))}
@@ -1286,9 +1380,9 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               {availableStresses.length > 0 && (
                 <div style={{ ...S.fBar, marginBottom: 8 }}>
                   <span style={S.fLabel}>Stress:</span>
-                  <button onClick={() => setStressF("all")} style={{ ...S.fBtn, ...(stressF === "all" ? S.fOn : {}) }}>All</button>
+                  <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
                   {availableStresses.map((s) => (
-                    <button key={s} onClick={() => setStressF(s)} style={{ ...S.fBtn, ...(stressF === s ? S.fOn : {}) }}>
+                    <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
                       {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
                     </button>
                   ))}
@@ -1326,16 +1420,20 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
           </div>
         )}
 
-        {/* ═══ COMBINATIONS ═══ */}
-        {tab === "combos" && (
-          <CombosTab
+        {/* ═══ AI PROPOSALS ═══ */}
+        {tab === "proposals" && (
+          <ProposalsTab
             ragCombos={ragCombos}
-            combos={combos}
             ratings={ratings}
             onRate={doRate}
             papers={papers}
             synthesisPaperMeta={synthesisPaperMeta}
           />
+        )}
+
+        {/* ═══ HYPOTHESES ═══ */}
+        {tab === "hypotheses" && (
+          <HypothesesTab combos={combos} />
         )}
 
         {/* ═══ CONTRADICTIONS ═══ */}

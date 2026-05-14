@@ -428,8 +428,19 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
                     "source_paper": p["title"],
                     "source_doi": p["doi"],
                     "paper_credibility": p["credibility_level"],
+                    "matched_species":  p.get("matched_species", []),
+                    "matched_stresses": p.get("matched_stresses", []),
                 })
     return papers, combos
+
+
+def _annotate_proposals(proposals: list[dict]) -> list[dict]:
+    """Add matched_species / matched_stresses to each RAG proposal via text matching."""
+    for p in proposals:
+        text = " ".join(filter(None, [p.get("suggestion", ""), p.get("rationale", "")])).lower()
+        p["matched_species"]  = [s  for s  in _SPECIES_TERMS if _match_terms(text, s,  _SPECIES_TERMS)]
+        p["matched_stresses"] = [st for st in _STRESS_TERMS  if _match_terms(text, st, _STRESS_TERMS)]
+    return proposals
 
 
 def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
@@ -541,7 +552,7 @@ async def search(req: SearchRequest) -> dict[str, Any]:
         "search_result": search_result,
         "papers": papers,
         "combos": combos,
-        "rag_combos": rag_combos,
+        "rag_combos": _annotate_proposals(rag_combos),
         "contradictions": [],
         "synthesis_paper_meta": _build_synthesis_paper_meta(rag_combos),
     }
@@ -604,7 +615,7 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
     return {
         "papers": papers,
         "combos": combos,
-        "rag_combos": rag_combos,
+        "rag_combos": _annotate_proposals(rag_combos),
         "synthesis_paper_meta": _build_synthesis_paper_meta(rag_combos),
     }
 
