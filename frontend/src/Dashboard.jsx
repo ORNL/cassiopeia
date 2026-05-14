@@ -740,6 +740,12 @@ function ProgressModal({ researcherId, searching, onDismiss }) {
     return () => clearInterval(id);
   }, [researcherId, isDone]);
 
+  useEffect(() => {
+    if (!isDone) return;
+    const id = setTimeout(onDismiss, 2000);
+    return () => clearTimeout(id);
+  }, [isDone, onDismiss]);
+
   const pct   = isDone ? 100 : (progress?.pct ?? 0);
   const stage = progress?.stage ?? "registering";
 
