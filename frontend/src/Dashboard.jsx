@@ -852,6 +852,20 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   // Load session history
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
+  // Restore profile form fields from the last saved profile
+  useEffect(() => {
+    fetch(`/api/researcher/${RESEARCHER_ID}`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((profile) => {
+        if (!profile) return;
+        if (profile.plant_species?.length)  setSpecies(profile.plant_species);
+        if (profile.stress_types?.length)   setStresses(profile.stress_types);
+        if (profile.source_targets?.length) setSources(profile.source_targets);
+        if (profile.time_range_months)      setTimeRange(profile.time_range_months);
+      })
+      .catch(() => {});
+  }, [RESEARCHER_ID]);
+
   // Restore last search results on mount
   useEffect(() => {
     fetch(`/api/researcher/${RESEARCHER_ID}/results`)

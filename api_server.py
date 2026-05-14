@@ -573,12 +573,17 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
 @app.get("/api/researcher/{researcher_id}")
 async def get_researcher(researcher_id: str) -> dict | None:
     """Return the stored profile for a researcher, or null if not found."""
-    if _mining_handle is None or _agent_ctx is None:
-        return None
-    try:
-        return await _call(_mining_handle.get_researcher(researcher_id))
-    except Exception:
-        return None
+    if _mining_handle is not None and _agent_ctx is not None:
+        try:
+            result = await _call(_mining_handle.get_researcher(researcher_id))
+            if result is not None:
+                return result
+        except Exception:
+            pass
+    # Fall back to DB for returning users whose profile isn't in agent memory yet.
+    if _paper_store is not None:
+        return _paper_store.load_profile(researcher_id)
+    return None
 
 
 @app.post("/api/anchor_search", responses={503: {"description": "RAG agent not ready"}})

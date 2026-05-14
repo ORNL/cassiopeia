@@ -151,6 +151,13 @@ class PaperStore:
         )
         self._conn.commit()
 
+    def load_profile(self, researcher_id: str) -> dict | None:
+        """Return the raw profile dict for a single researcher, or None."""
+        row = self._conn.execute(
+            "SELECT data FROM profiles WHERE researcher_id = ?", (researcher_id,)
+        ).fetchone()
+        return json.loads(row["data"]) if row else None
+
     def load_profiles(self) -> list[ResearcherProfile]:
         rows = self._conn.execute("SELECT data FROM profiles").fetchall()
         profiles = []
