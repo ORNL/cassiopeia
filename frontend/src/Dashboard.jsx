@@ -954,9 +954,21 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
-      setContradictions(data.contradictions || []);
+      setContradictions([]);
       setTab("results");
       fetch(`/api/sessions/${RESEARCHER_ID}`).then((r) => r.ok ? r.json() : []).then(setSessions).catch(() => {});
+      // Contradiction detection runs in the background — poll until results arrive.
+      let attempts = 0;
+      const pollId = setInterval(() => {
+        attempts++;
+        fetch(`/api/contradictions/${RESEARCHER_ID}`)
+          .then((r) => r.ok ? r.json() : [])
+          .then((c) => {
+            if (c.length > 0) { setContradictions(c); clearInterval(pollId); }
+            else if (attempts >= 12) clearInterval(pollId);
+          })
+          .catch(() => { if (attempts >= 12) clearInterval(pollId); });
+      }, 5000);
     } catch (err) {
       setSearchError(err.message);
       setShowProgress(false);

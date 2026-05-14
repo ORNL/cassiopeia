@@ -64,6 +64,9 @@ _paper_store: PaperStore | None = None
 # Lightweight in-memory store; resets on server restart.
 _search_progress: dict[str, dict] = {}
 
+# Per-researcher contradiction results — populated by the background detection task.
+_contradictions_store: dict[str, list] = {}
+
 
 def _set_progress(
     researcher_id: str,
@@ -332,7 +335,11 @@ def _schedule_contradictions(researcher_id: str) -> None:
         task = asyncio.get_running_loop().create_task(
             _rag_handle.detect_contradictions(researcher_id)
         )
-        task.add_done_callback(app.state.bg_tasks.discard)
+        def _store(t: asyncio.Task) -> None:
+            app.state.bg_tasks.discard(t)
+            if not t.cancelled() and t.exception() is None:
+                _contradictions_store[researcher_id] = t.result()
+        task.add_done_callback(_store)
         app.state.bg_tasks.add(task)
 
     _agent_ctx.run(_bg)
@@ -415,6 +422,7 @@ async def search(req: SearchRequest) -> dict[str, Any]:
     rag_combos: list = []
     if _rag_handle is not None:
         rag_combos = await _run_rag_synthesis(req, equipment)
+        _contradictions_store.pop(req.researcher_id, None)
         _schedule_contradictions(req.researcher_id)
 
     if _paper_store is not None:
@@ -488,6 +496,12 @@ async def get_new_papers(researcher_id: str) -> dict:
 _CRED_ICONS = {
     "high": "🟢", "moderate": "🟡", "preliminary": "🔴", "conflicting": "⚠️",
 }
+
+
+@app.get("/api/contradictions/{researcher_id}")
+async def get_contradictions(researcher_id: str) -> list[dict]:
+    """Return contradiction-detection results computed after the last search."""
+    return _contradictions_store.get(researcher_id, [])
 
 
 @app.get("/api/researcher/{researcher_id}/results")
