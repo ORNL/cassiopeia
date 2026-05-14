@@ -24,6 +24,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Annotated, TypedDict
+from urllib.parse import parse_qs, urlparse
 
 import chainlit as cl
 import httpx
@@ -281,16 +282,14 @@ def _profile_summary(profile: dict) -> str:
     prep = profile.get("priority_reproducibility", 0.5)
     anchor = profile.get("anchor_paper") or "—"
     return (
-        "Here is what I have — let me know if anything needs correcting:\n\n"
+        "Here is what I have:\n\n"
         f"• **Species**       : {species}\n"
         f"• **Stresses**      : {stresses}\n"
         f"• **Keywords**      : {keywords}\n"
         f"• **Sources**       : {sources}\n"
         f"• **Time range**    : last {months} months\n"
-        f"• **Priorities**    : novelty {pn} · relevance {pr} · "
-        f"methodology {pm} · reproducibility {prep}\n"
         f"• **Anchor paper**  : {anchor}\n\n"
-        "**Shall I run the search?**"
+        "**Shall I run this search again or do you want to start a new one?**"
     )
 
 
@@ -655,9 +654,21 @@ async def on_start() -> None:
     # Name may be passed from the landing page as a URL query parameter.
     name: str = ""
     try:
-        name = cl.context.request.query_params.get("name", "").strip()
-    except Exception:
-        pass
+        env = cl.context.session.environ
+        # Try WSGI-style key first, then ASGI-style (lowercase bytes).
+        qs = env.get("QUERY_STRING", "")
+        if not qs:
+            raw = env.get("query_string", b"")
+            qs = raw.decode() if isinstance(raw, bytes) else str(raw)
+        name = (parse_qs(qs).get("name", [""])[0]).strip()
+        # Last resort: parse the name from the HTTP Referer header.
+        if not name:
+            referer = env.get("HTTP_REFERER", "") or env.get("http_referer", "")
+            if referer:
+                name = (parse_qs(urlparse(referer).query).get("name", [""])[0]).strip()
+        logger.info("on_start: qs=%r  name=%r", qs, name)
+    except Exception as exc:
+        logger.warning("on_start: could not read query params: %s", exc)
 
     if name:
         rid = name.lower().replace(" ", "_")
@@ -723,18 +734,18 @@ async def _welcome(name: str, researcher_id: str) -> None:
 
     if stored:
         # Pre-fill profile from stored data and mark all topics covered.
-        # The user can still correct anything before running.
-        priorities = stored.get("priorities", {})
+        # ResearcherProfile stores priorities as flat keys (priority_novelty etc.),
+        # not under a nested "priorities" dict.
         pending = {
             "plant_species":            stored.get("plant_species") or [],
             "stress_types":             stored.get("stress_types") or [],
             "expertise_keywords":       stored.get("expertise_keywords") or [],
             "source_targets":           stored.get("source_targets") or [],
             "time_range_months":        stored.get("time_range_months", 12),
-            "priority_novelty":         priorities.get("novelty", 0.5),
-            "priority_relevance":       priorities.get("relevance", 0.5),
-            "priority_methodology":     priorities.get("methodology", 0.5),
-            "priority_reproducibility": priorities.get("reproducibility", 0.5),
+            "priority_novelty":         stored.get("priority_novelty", 0.5),
+            "priority_relevance":       stored.get("priority_relevance", 0.5),
+            "priority_methodology":     stored.get("priority_methodology", 0.5),
+            "priority_reproducibility": stored.get("priority_reproducibility", 0.5),
         }
         cl.user_session.set("profile_stage", "confirm")
         cl.user_session.set("pending_profile", pending)
@@ -747,7 +758,13 @@ async def _welcome(name: str, researcher_id: str) -> None:
         cl.user_session.set("profile_stage", "collecting")
         cl.user_session.set("pending_profile", {})
         cl.user_session.set("topics_covered", [])
-        await cl.Message(content=f"{greeting}\n\n{_all_topics_prompt()}").send()
+        first_q = f"**{_TOPIC_LABELS['s1']}**\n{_TOPIC_QUESTIONS['s1']}"
+        await cl.Message(
+            content=(
+                f"Hi, **{name}**! I'm your plant biology literature assistant.\n\n"
+                f"Let's start a new search.\n\n{first_q}"
+            )
+        ).send()
 
 
 _COMBO_TRIGGERS = frozenset({

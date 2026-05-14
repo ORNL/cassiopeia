@@ -846,6 +846,21 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   // Load session history
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
+  // Restore last search results on mount
+  useEffect(() => {
+    fetch(`/api/researcher/${RESEARCHER_ID}/results`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((d) => {
+        if (d && d.papers.length > 0) {
+          setPapers(d.papers);
+          setSynthesisPaperMeta(d.synthesis_paper_meta || {});
+          setCombos(d.combos || []);
+          setRagCombos(d.rag_combos || []);
+        }
+      })
+      .catch(() => {});
+  }, [RESEARCHER_ID]);
+
   // Fetch papers added since last login
   useEffect(() => {
     fetch(`/api/researcher/${RESEARCHER_ID}/new-papers`)

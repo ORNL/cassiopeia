@@ -119,6 +119,10 @@ class PaperStore:
                 "ALTER TABLE papers ADD COLUMN added_at TEXT NOT NULL DEFAULT (datetime('now'))"
             )
             self._conn.commit()
+        sess_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sessions)")}
+        if "proposals_snap" not in sess_cols:
+            self._conn.execute("ALTER TABLE sessions ADD COLUMN proposals_snap TEXT")
+            self._conn.commit()
 
     # ------------------------------------------------------------------
     # Profiles
@@ -345,11 +349,12 @@ class PaperStore:
         profile_snap: dict,
         n_papers: int,
         n_proposals: int,
+        proposals_snap: list | None = None,
     ) -> None:
         self._conn.execute(
             """INSERT OR REPLACE INTO sessions
-               (session_id, researcher_id, timestamp, profile_snap, n_papers, n_proposals)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (session_id, researcher_id, timestamp, profile_snap, n_papers, n_proposals, proposals_snap)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (
                 session_id,
                 researcher_id,
@@ -357,9 +362,22 @@ class PaperStore:
                 json.dumps(profile_snap),
                 n_papers,
                 n_proposals,
+                json.dumps(proposals_snap) if proposals_snap is not None else None,
             ),
         )
         self._conn.commit()
+
+    def get_last_proposals(self, researcher_id: str) -> list[dict]:
+        """Return the rag_combos from the researcher's most recent session."""
+        row = self._conn.execute(
+            """SELECT proposals_snap FROM sessions
+               WHERE researcher_id = ? AND proposals_snap IS NOT NULL
+               ORDER BY timestamp DESC LIMIT 1""",
+            (researcher_id,),
+        ).fetchone()
+        if row and row["proposals_snap"]:
+            return json.loads(row["proposals_snap"])
+        return []
 
     def get_sessions(self, researcher_id: str, limit: int = 20) -> list[dict]:
         rows = self._conn.execute(

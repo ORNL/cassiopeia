@@ -430,6 +430,7 @@ async def search(req: SearchRequest) -> dict[str, Any]:
             },
             n_papers=len(papers),
             n_proposals=len(rag_combos) + len(combos),
+            proposals_snap=rag_combos if rag_combos else None,
         )
 
     n_props = len(rag_combos) + len(combos)
@@ -484,12 +485,86 @@ async def get_new_papers(researcher_id: str) -> dict:
     return {"new_since": last_login, "new_count": len(new_papers), "new_papers": new_papers}
 
 
+_CRED_ICONS = {
+    "high": "🟢", "moderate": "🟡", "preliminary": "🔴", "conflicting": "⚠️",
+}
+
+
+@app.get("/api/researcher/{researcher_id}/results")
+async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
+    """Return the last persisted papers and proposals for session restore."""
+    empty: dict[str, Any] = {"papers": [], "combos": [], "rag_combos": [], "synthesis_paper_meta": {}}
+    if _paper_store is None:
+        return empty
+
+    scored = _paper_store.load_papers(researcher_id)
+    if not scored:
+        return empty
+
+    scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
+
+    papers: list[dict[str, Any]] = []
+    for i, sp in enumerate(scored[:20]):
+        papers.append({
+            "rank": i + 1,
+            "paper_id": sp.paper.paper_id,
+            "title": sp.paper.title,
+            "authors": sp.paper.authors[:3],
+            "journal": sp.paper.journal,
+            "doi": sp.paper.doi,
+            "url": sp.paper.url,
+            "published": sp.paper.published_date.isoformat() if sp.paper.published_date else None,
+            "source": sp.paper.source.value,
+            "is_open_access": sp.paper.is_open_access,
+            "scores": {
+                "overall": round(sp.relevance.overall, 3),
+                "species_match": round(sp.relevance.species_match, 3),
+                "stress_match": round(sp.relevance.stress_match, 3),
+                "method_match": round(sp.relevance.method_match, 3),
+                "recency": round(sp.relevance.recency, 3),
+                "credibility": round(sp.relevance.credibility, 3),
+                "novelty": round(sp.relevance.novelty, 3),
+            },
+            "credibility_level": sp.credibility.value,
+            "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
+            "suggested_combinations": sp.suggested_combinations,
+        })
+
+    seen: set[str] = set()
+    combos: list[dict[str, Any]] = []
+    for p in papers:
+        for suggestion in p.get("suggested_combinations", []):
+            if suggestion not in seen:
+                seen.add(suggestion)
+                combos.append({
+                    "suggestion": suggestion,
+                    "source_paper": p["title"],
+                    "source_doi": p["doi"],
+                    "paper_credibility": p["credibility_level"],
+                })
+            if len(combos) >= 10:
+                break
+        if len(combos) >= 10:
+            break
+
+    rag_combos = _paper_store.get_last_proposals(researcher_id)
+    return {
+        "papers": papers,
+        "combos": combos,
+        "rag_combos": rag_combos,
+        "synthesis_paper_meta": _build_synthesis_paper_meta(rag_combos),
+    }
+
+
 @app.get("/api/researcher/{researcher_id}")
 async def get_researcher(researcher_id: str) -> dict | None:
     """Return the stored profile for a researcher, or null if not found."""
     if _mining_handle is None or _agent_ctx is None:
         return None
-    return await _call(_mining_handle.get_researcher(researcher_id))
+    try:
+        return await _call(_mining_handle.get_researcher(researcher_id))
+    except Exception:
+        return None
 
 
 @app.post("/api/anchor_search", responses={503: {"description": "RAG agent not ready"}})
