@@ -335,11 +335,14 @@ def _schedule_contradictions(researcher_id: str) -> None:
         task = asyncio.get_running_loop().create_task(
             _rag_handle.detect_contradictions(researcher_id)
         )
-        def _store(t: asyncio.Task) -> None:
+        def _done(t: asyncio.Task) -> None:
             app.state.bg_tasks.discard(t)
             if not t.cancelled() and t.exception() is None:
-                _contradictions_store[researcher_id] = t.result()
-        task.add_done_callback(_store)
+                results = _annotate_contradictions(t.result())
+                _contradictions_store[researcher_id] = results
+                if _paper_store:
+                    _paper_store.save_contradictions(researcher_id, results)
+        task.add_done_callback(_done)
         app.state.bg_tasks.add(task)
 
     _agent_ctx.run(_bg)
@@ -441,6 +444,17 @@ def _annotate_proposals(proposals: list[dict]) -> list[dict]:
         p["matched_species"]  = [s  for s  in _SPECIES_TERMS if _match_terms(text, s,  _SPECIES_TERMS)]
         p["matched_stresses"] = [st for st in _STRESS_TERMS  if _match_terms(text, st, _STRESS_TERMS)]
     return proposals
+
+
+def _annotate_contradictions(contradictions: list[dict]) -> list[dict]:
+    """Add matched_species / matched_stresses to each contradiction via text matching."""
+    for c in contradictions:
+        text = " ".join(filter(None, [
+            c.get("claim_a", ""), c.get("claim_b", ""), c.get("resolution_hint", ""),
+        ])).lower()
+        c["matched_species"]  = [s  for s  in _SPECIES_TERMS if _match_terms(text, s,  _SPECIES_TERMS)]
+        c["matched_stresses"] = [st for st in _STRESS_TERMS  if _match_terms(text, st, _STRESS_TERMS)]
+    return contradictions
 
 
 def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
@@ -601,8 +615,17 @@ _CRED_ICONS = {
 
 @app.get("/api/contradictions/{researcher_id}")
 async def get_contradictions(researcher_id: str) -> list[dict]:
-    """Return contradiction-detection results computed after the last search."""
-    return _contradictions_store.get(researcher_id, [])
+    """Return all accumulated contradiction-detection results, newest first."""
+    db_results = _paper_store.get_all_contradictions(researcher_id) if _paper_store else []
+    in_memory  = _contradictions_store.get(researcher_id, [])
+    seen: set[str] = set()
+    merged: list[dict] = []
+    for c in in_memory + db_results:
+        key = "|".join(sorted(c.get("papers", [])))
+        if key not in seen:
+            seen.add(key)
+            merged.append(c)
+    return merged
 
 
 @app.get("/api/researcher/{researcher_id}/results")

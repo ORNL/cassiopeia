@@ -743,6 +743,69 @@ function HypothesesTab({ combos }) {
 
 HypothesesTab.propTypes = { combos: PropTypes.array };
 
+function ContradictionsTab({ contradictions }) {
+  const [speciesF, setSpeciesF] = useState([]);
+  const [stressF,  setStressF]  = useState([]);
+  const [pageSize, setPageSize] = useState(10);
+  const [page,     setPage]     = useState(0);
+
+  const filtered = useMemo(
+    () => filterCombos(contradictions, speciesF, stressF),
+    [contradictions, speciesF, stressF],
+  );
+
+  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safe      = Math.min(page, pageCount - 1);
+  const paged     = filtered.slice(safe * pageSize, (safe + 1) * pageSize);
+
+  if (contradictions.length === 0) {
+    return (
+      <div style={S.empty}>
+        <span style={{ fontSize: 48 }}>⚠️</span>
+        <p style={{ color: "#94a3b8", marginTop: 12 }}>No contradictions detected yet. Run a scan with enough papers to populate the knowledge base.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <h3 style={S.cardH}>Detected Contradictions</h3>
+        <span style={{ ...S.ragBadge, borderColor: "#7c3a1a", color: "#fb923c", background: "#1a0e06" }}>{contradictions.length} found</span>
+      </div>
+      <p style={S.cardSub}>Papers in your knowledge base that present conflicting or irreconcilable findings</p>
+      <ComboFilterBar items={contradictions} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={contradictions.length} filtered={filtered.length} />
+      {paged.map((c) => (
+        <div key={[...c.papers].sort((a, b) => a.localeCompare(b)).join("|")} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+            {c.papers.map((p) => <span key={p} style={{ fontSize: 11, fontWeight: 600, color: "#fb923c", background: "#1f0c04", border: "1px solid #7c3a1a", borderRadius: 6, padding: "2px 8px" }}>{p}</span>)}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
+            <div style={{ background: "#0c1a08", borderRadius: 6, padding: "8px 12px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim A</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_a}</div>
+            </div>
+            <div style={{ background: "#1a0c08", borderRadius: 6, padding: "8px 12px" }}>
+              <div style={{ fontSize: 10, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim B</div>
+              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_b}</div>
+            </div>
+          </div>
+          {c.resolution_hint && (
+            <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>
+              Possible resolution: {c.resolution_hint}
+            </div>
+          )}
+        </div>
+      ))}
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
+    </div>
+  );
+}
+
+ContradictionsTab.propTypes = { contradictions: PropTypes.array };
+
 // ─────────────────────────────────────────────────
 // Module-level helpers (excluded from Dashboard cognitive complexity)
 // ─────────────────────────────────────────────────
@@ -810,17 +873,81 @@ function formatSessionMonths(months) {
   return months < 12 ? `${months} mo` : `${Math.round(months / 12)} yr`;
 }
 
-function pollForContradictions(researcherId, onResult) {
+function getInitialTab() {
+  return new URLSearchParams(globalThis.location.search).get("tab") || "profile";
+}
+
+async function fetchSessions(researcherId, setSessions) {
+  try {
+    const r = await fetch(`/api/sessions/${researcherId}`);
+    if (r.ok) setSessions(await r.json());
+  } catch { /* silent */ }
+}
+
+async function runAnchorSearch(researcherId, anchorInput, setAnchorLoading, setAnchorResults) {
+  if (!anchorInput.trim()) return;
+  setAnchorLoading(true);
+  try {
+    const res = await fetch("/api/anchor_search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ doi_or_title: anchorInput.trim(), researcher_id: researcherId, n_results: 8 }),
+    });
+    if (res.ok) setAnchorResults(await res.json());
+  } catch {
+    setAnchorResults([]);
+  } finally {
+    setAnchorLoading(false);
+  }
+}
+
+async function runExtractKeywords(researchPrompt, kwLoading, setKwLoading, setExtractedKeywords) {
+  if (!researchPrompt.trim() || kwLoading) return;
+  setKwLoading(true);
+  try {
+    setExtractedKeywords(await fetchKeywords(researchPrompt));
+  } catch { /* silent */ } finally {
+    setKwLoading(false);
+  }
+}
+
+async function submitRating(researcherId, proposal, rating) {
+  try {
+    await fetch("/api/feedback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        proposal_id: proposal.proposal_id,
+        researcher_id: researcherId,
+        suggestion: proposal.suggestion,
+        theme: proposal.theme || null,
+        rating,
+      }),
+    });
+  } catch { /* fire-and-forget */ }
+}
+
+async function loadRestoredContradictions(researcherId, setContradictions) {
+  try {
+    const r = await fetch(`/api/contradictions/${researcherId}`);
+    if (r.ok) {
+      const data = await r.json();
+      if (data.length > 0) setContradictions(data);
+    }
+  } catch { /* silent */ }
+}
+
+function pollForContradictions(researcherId, setContradictions) {
   let attempts = 0;
   const pollId = setInterval(() => {
     attempts++;
     fetch(`/api/contradictions/${researcherId}`)
       .then((r) => r.ok ? r.json() : [])
       .then((c) => {
-        if (c.length > 0) { onResult(c); clearInterval(pollId); }
-        else if (attempts >= 12) clearInterval(pollId);
+        if (c.length > 0) { setContradictions(c); clearInterval(pollId); }
+        else if (attempts >= 60) clearInterval(pollId);
       })
-      .catch(() => { if (attempts >= 12) clearInterval(pollId); });
+      .catch(() => { if (attempts >= 60) clearInterval(pollId); });
   }, 5000);
 }
 
@@ -996,10 +1123,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [sources, setSources] = useState(["biorxiv", "pubmed", "plos_one", "frontiers", "plant_physiology"]);
   const [timeRange, setTimeRange] = useState(12);
 
-  const [tab, setTab] = useState(() => {
-    const p = new URLSearchParams(globalThis.location.search).get("tab");
-    return p || "profile";
-  });
+  const [tab, setTab] = useState(getInitialTab);
   const [expPaper, setExpPaper] = useState(null);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
@@ -1029,12 +1153,10 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
   const RESEARCHER_ID = researcherId || "researcher_001";
 
-  const refreshSessions = useCallback(async () => {
-    try {
-      const r = await fetch(`/api/sessions/${RESEARCHER_ID}`);
-      if (r.ok) setSessions(await r.json());
-    } catch { /* silent */ }
-  }, [RESEARCHER_ID]);
+  const refreshSessions = useCallback(
+    () => fetchSessions(RESEARCHER_ID, setSessions),
+    [RESEARCHER_ID],
+  );
 
   // Poll agent status every 10 seconds
   useEffect(() => {
@@ -1045,57 +1167,27 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   // Load session history
   useEffect(() => { refreshSessions(); }, [refreshSessions]);
 
-  // Restore profile, last results, and new-paper markers on mount
+  // Restore profile, last results, contradictions, and new-paper markers on mount
   useEffect(() => {
     loadAndApplyProfile(RESEARCHER_ID, setSpecies, setStresses, setSources, setTimeRange);
     loadRestoredResults(RESEARCHER_ID, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos, setPage);
+    loadRestoredContradictions(RESEARCHER_ID, setContradictions);
     loadNewPapers(RESEARCHER_ID, setNewPaperIds, setNewSince);
   }, [RESEARCHER_ID]);
 
-  const doAnchorSearch = useCallback(async () => {
-    if (!anchorInput.trim()) return;
-    setAnchorLoading(true);
-    try {
-      const res = await fetch("/api/anchor_search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ doi_or_title: anchorInput.trim(), researcher_id: RESEARCHER_ID, n_results: 8 }),
-      });
-      if (res.ok) setAnchorResults(await res.json());
-    } catch {
-      setAnchorResults([]);
-    } finally {
-      setAnchorLoading(false);
-    }
-  }, [anchorInput]);
+  const doAnchorSearch = useCallback(
+    () => runAnchorSearch(RESEARCHER_ID, anchorInput, setAnchorLoading, setAnchorResults),
+    [anchorInput],
+  );
 
-  const doExtractKeywords = useCallback(async () => {
-    if (!researchPrompt.trim() || kwLoading) return;
-    setKwLoading(true);
-    try {
-      setExtractedKeywords(await fetchKeywords(researchPrompt));
-    } catch { /* silent */ } finally {
-      setKwLoading(false);
-    }
-  }, [researchPrompt, kwLoading]);
+  const doExtractKeywords = useCallback(
+    () => runExtractKeywords(researchPrompt, kwLoading, setKwLoading, setExtractedKeywords),
+    [researchPrompt, kwLoading],
+  );
 
-  const doRate = useCallback(async (proposal, rating) => {
+  const doRate = useCallback((proposal, rating) => {
     setRatings((prev) => ({ ...prev, [proposal.proposal_id]: rating }));
-    try {
-      await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          proposal_id: proposal.proposal_id,
-          researcher_id: RESEARCHER_ID,
-          suggestion: proposal.suggestion,
-          theme: proposal.theme || null,
-          rating,
-        }),
-      });
-    } catch {
-      // fire-and-forget
-    }
+    submitRating(RESEARCHER_ID, proposal, rating);
   }, []);
 
   const doSearch = useCallback(async () => {
@@ -1123,7 +1215,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
-      setContradictions([]);
       setPage(0);
       setTab("results");
       refreshSessions();
@@ -1438,44 +1529,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
         {/* ═══ CONTRADICTIONS ═══ */}
         {tab === "contradictions" && (
-          <div>
-            {contradictions.length === 0 ? (
-              <div style={S.empty}>
-                <span style={{ fontSize: 48 }}>⚠️</span>
-                <p style={{ color: "#94a3b8", marginTop: 12 }}>No contradictions detected yet. Run a scan with enough papers to populate the knowledge base.</p>
-              </div>
-            ) : (
-              <div style={S.card}>
-                <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
-                  <h3 style={S.cardH}>Detected Contradictions</h3>
-                  <span style={{ ...S.ragBadge, borderColor: "#7c3a1a", color: "#fb923c", background: "#1a0e06" }}>{contradictions.length} found</span>
-                </div>
-                <p style={S.cardSub}>Papers in your knowledge base that present conflicting or irreconcilable findings</p>
-                {contradictions.map((c) => (
-                  <div key={[...c.papers].sort((a, b) => a.localeCompare(b)).join("|")} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
-                    <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-                      {c.papers.map((p) => <span key={p} style={{ fontSize: 11, fontWeight: 600, color: "#fb923c", background: "#1f0c04", border: "1px solid #7c3a1a", borderRadius: 6, padding: "2px 8px" }}>{p}</span>)}
-                    </div>
-                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
-                      <div style={{ background: "#0c1a08", borderRadius: 6, padding: "8px 12px" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim A</div>
-                        <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_a}</div>
-                      </div>
-                      <div style={{ background: "#1a0c08", borderRadius: 6, padding: "8px 12px" }}>
-                        <div style={{ fontSize: 10, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim B</div>
-                        <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_b}</div>
-                      </div>
-                    </div>
-                    {c.resolution_hint && (
-                      <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>
-                        Possible resolution: {c.resolution_hint}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          <ContradictionsTab contradictions={contradictions} />
         )}
       </main>
 

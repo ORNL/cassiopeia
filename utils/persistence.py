@@ -106,6 +106,16 @@ class PaperStore:
                 created_at    TEXT NOT NULL DEFAULT (datetime('now')),
                 PRIMARY KEY (proposal_id, researcher_id)
             );
+
+            CREATE TABLE IF NOT EXISTS contradictions (
+                researcher_id TEXT NOT NULL,
+                pair_key      TEXT NOT NULL,
+                data          TEXT NOT NULL,
+                detected_at   TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (researcher_id, pair_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_contradictions_researcher
+                ON contradictions (researcher_id, detected_at);
             """
         )
         self._conn.commit()
@@ -441,6 +451,32 @@ class PaperStore:
             (researcher_id,),
         ).fetchall()
         return [{"suggestion": row["suggestion"], "theme": row["theme"]} for row in rows]
+
+    # ------------------------------------------------------------------
+    # Contradictions
+    # ------------------------------------------------------------------
+
+    def save_contradictions(self, researcher_id: str, contradictions: list[dict]) -> None:
+        """Upsert contradiction detections, keyed by researcher + sorted paper-pair."""
+        rows = []
+        for c in contradictions:
+            pair_key = "|".join(sorted(c.get("papers", [])))
+            if pair_key:
+                rows.append((researcher_id, pair_key, json.dumps(c)))
+        if rows:
+            self._conn.executemany(
+                "INSERT OR REPLACE INTO contradictions (researcher_id, pair_key, data) VALUES (?, ?, ?)",
+                rows,
+            )
+            self._conn.commit()
+
+    def get_all_contradictions(self, researcher_id: str) -> list[dict]:
+        """Return all stored contradictions for a researcher, newest first."""
+        rows = self._conn.execute(
+            "SELECT data FROM contradictions WHERE researcher_id = ? ORDER BY detected_at DESC",
+            (researcher_id,),
+        ).fetchall()
+        return [json.loads(row["data"]) for row in rows]
 
     # ------------------------------------------------------------------
     # Lifecycle
