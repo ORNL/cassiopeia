@@ -302,12 +302,21 @@ function App() {
   const [priorities, setPriorities] = useState(DEFAULT_PRIORITIES);
   const [scanSettings, setScanSettings] = useState(DEFAULT_SCAN_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
+  const [loginPending, setLoginPending] = useState(false);
 
-  const handleLogin = (name) => {
+  const handleLogin = async (name) => {
     if (!name) { setResearcher(null); setMode(null); return; }
     const id = name.toLowerCase().replaceAll(/\s+/g, "_");
-    const savedPriorities = loadPriorities(id);
-    const savedScan = loadScanSettings(id);
+    setLoginPending(true);
+    // Check if the backend still knows this researcher (profile absent after clean.sh)
+    let backendKnown = false;
+    try {
+      const r = await fetch(`/api/researcher/${id}`);
+      backendKnown = r.ok && (await r.json()) !== null;
+    } catch { /* network error — fall back to treating as new */ }
+    setLoginPending(false);
+    const savedPriorities = backendKnown ? loadPriorities(id) : null;
+    const savedScan       = backendKnown ? loadScanSettings(id) : null;
     setResearcher({ name, id });
     if (savedScan) setScanSettings(savedScan);
     if (savedPriorities) {
@@ -376,7 +385,7 @@ function App() {
       </>
     );
 
-  return <LandingPage onLogin={handleLogin} />;
+  return <LandingPage onLogin={handleLogin} pending={loginPending} />;
 }
 
 createRoot(document.getElementById("root")).render(

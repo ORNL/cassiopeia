@@ -1300,11 +1300,11 @@ ProgressModal.propTypes = {
 // ─────────────────────────────────────────────────
 
 export default function Dashboard({ onBack, researcherName, researcherId, priorities, scanSettings, onOpenSettings }) {
-  const [species, setSpecies] = useState(["poplar", "arabidopsis"]);
-  const [stresses, setStresses] = useState(["drought", "nutrient"]);
+  const [species, setSpecies] = useState([]);
+  const [stresses, setStresses] = useState([]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
   const [researchPrompt, setResearchPrompt] = useState("");
-  const [sources, setSources] = useState(["biorxiv", "pubmed", "plos_one", "frontiers", "plant_physiology"]);
+  const [sources, setSources] = useState([]);
   const [timeRange, setTimeRange] = useState(12);
 
   const [tab, setTab] = useState(getInitialTab);

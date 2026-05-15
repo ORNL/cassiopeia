@@ -4,13 +4,15 @@
 import { useState } from "react";
 import PropTypes from "prop-types";
 
-export default function LandingPage({ researcher, onLogin, onSelect }) {
+export default function LandingPage({ onLogin, pending }) {
   const [input, setInput] = useState("");
 
   const handleLogin = () => {
     const name = input.trim();
-    if (name) onLogin(name);
+    if (name && !pending) onLogin(name);
   };
+
+  const disabled = !input.trim() || pending;
 
   return (
     <div style={S.root}>
@@ -23,60 +25,28 @@ export default function LandingPage({ researcher, onLogin, onSelect }) {
         </p>
       </div>
 
-      {researcher ? (
-        <>
-          <div style={S.userBar}>
-            <span style={S.userGreet}>Welcome, <strong>{researcher.name}</strong></span>
-            <button style={S.logoutBtn} onClick={() => onLogin(null)}>Change name</button>
-          </div>
-
-          <div style={S.cards}>
-            <button style={S.card} onClick={() => onSelect("dashboard")}>
-              <div style={S.cardIcon}>⚙️</div>
-              <div style={S.cardTitle}>Dashboard</div>
-              <div style={S.cardDesc}>
-                Configure your profile directly: pick species, stress types,
-                phenotyping methods, and priority weights using structured
-                selectors, then explore results and combination suggestions.
-              </div>
-              <div style={{ ...S.pill, ...S.pillGreen }}>Structured form</div>
-            </button>
-
-            <button style={S.card} onClick={() => onSelect("chat")}>
-              <div style={S.cardIcon}>💬</div>
-              <div style={S.cardTitle}>Chat with AI</div>
-              <div style={S.cardDesc}>
-                Describe your research in plain language. The AI will ask
-                follow-up questions, extract your profile, and trigger the search
-                — no forms to fill in.
-              </div>
-              <div style={{ ...S.pill, ...S.pillCyan }}>Conversational</div>
-            </button>
-          </div>
-        </>
-      ) : (
-        <div style={S.loginBox}>
-          <p style={S.loginLabel}>Enter your name to get started</p>
-          <div style={S.loginRow}>
-            <input
-              style={S.loginInput}
-              type="text"
-              placeholder="Your name…"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-              autoFocus
-            />
-            <button
-              style={{ ...S.loginBtn, ...(input.trim() ? {} : S.loginBtnDisabled) }}
-              onClick={handleLogin}
-              disabled={!input.trim()}
-            >
-              Enter →
-            </button>
-          </div>
+      <div style={S.loginBox}>
+        <p style={S.loginLabel}>Enter your name to get started</p>
+        <div style={S.loginRow}>
+          <input
+            style={S.loginInput}
+            type="text"
+            placeholder="Your name…"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+            autoFocus
+            disabled={pending}
+          />
+          <button
+            style={{ ...S.loginBtn, ...(disabled ? S.loginBtnDisabled : {}) }}
+            onClick={handleLogin}
+            disabled={disabled}
+          >
+            {pending ? "⏳" : "Enter →"}
+          </button>
         </div>
-      )}
+      </div>
 
       <div style={S.footer}>
         Powered by Academy · Europe PMC · arXiv · LiteLLM
@@ -255,7 +225,6 @@ const S = {
 };
 
 LandingPage.propTypes = {
-  researcher: PropTypes.shape({ name: PropTypes.string, id: PropTypes.string }),
   onLogin: PropTypes.func.isRequired,
-  onSelect: PropTypes.func.isRequired,
+  pending: PropTypes.bool,
 };
