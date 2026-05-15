@@ -324,6 +324,10 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
                     available_equipment=equipment,
                 )
             )
+        logger.info(
+            "_run_rag_synthesis done — %d proposal(s) after synthesis + feasibility",
+            len(rag_combos),
+        )
     except Exception as exc:
         logger.warning("RAG combination synthesis failed: %s", exc)
     return rag_combos
@@ -525,16 +529,37 @@ async def search(req: SearchRequest) -> dict[str, Any]:
 
     _set_progress(req.researcher_id, "fetching", "Loading ranked papers…", 42)
     await asyncio.sleep(0)
-    logger.info("Search done: %s — loading all ranked papers from store…", search_result)
+    papers_found = search_result.get("papers_found", 0)
+    logger.info(
+        "Search done: %s — %s",
+        search_result,
+        f"{papers_found} new paper(s) found this run" if papers_found > 0
+        else "no new papers found this run (all already in store or no results from sources)",
+    )
     papers, combos = _load_papers_and_combos(req.researcher_id)
-    logger.info("Got %d papers, %d combinations", len(papers), len(combos))
+    logger.info(
+        "Loaded %d papers and %d per-paper hypotheses from store (cumulative across all searches)",
+        len(papers), len(combos),
+    )
 
     rag_combos: list = []
+    existing_proposals = (
+        _paper_store.get_last_proposals(req.researcher_id) if _paper_store else []
+    )
+    skip_synthesis = papers_found == 0 and len(existing_proposals) > 0
     if _rag_handle is not None:
-        try:
-            rag_combos = await asyncio.wait_for(_run_rag_synthesis(req, equipment), timeout=600)
-        except asyncio.TimeoutError:
-            logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
+        if skip_synthesis:
+            logger.info(
+                "Skipping RAG synthesis — no new papers and %d proposals already exist",
+                len(existing_proposals),
+            )
+            rag_combos = existing_proposals
+        else:
+            try:
+                rag_combos = await asyncio.wait_for(_run_rag_synthesis(req, equipment), timeout=600)
+                logger.info("RAG synthesis complete — %d proposals generated", len(rag_combos))
+            except asyncio.TimeoutError:
+                logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
         _contradictions_store.pop(req.researcher_id, None)
         _schedule_contradictions(req.researcher_id)
 

@@ -200,7 +200,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
   const paperUrl = paper.doi ? `https://doi.org/${paper.doi}` : paper.url;
 
   return (
-    <div style={{ ...S.pCard, ...(expanded ? { borderColor: "#334155" } : {}) }}>
+    <div style={{ ...S.pCard, ...(expanded ? { borderColor: "#334155" } : {}) }} onClick={onToggle}>
       <div style={S.pHead}>
         <div style={S.pRank}>#{paper.rank}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -209,6 +209,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
             {paperUrl ? (
               <a href={paperUrl} target="_blank" rel="noreferrer"
                 style={{ color: "inherit", textDecoration: "none" }}
+                onClick={(e) => e.stopPropagation()}
               >{cleanTitle(paper.title)} <span style={{ fontSize: 10, opacity: 0.5 }}>↗</span></a>
             ) : cleanTitle(paper.title)}
           </h4>
@@ -220,11 +221,11 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
             <span>{paper.published?.slice(0, 7)}</span>
           </div>
         </div>
-        <button onClick={onToggle} style={S.pBadgeBtn} aria-label={expanded ? "Collapse" : "Expand details"}>
+        <div style={S.pBadgeBtn} aria-label={expanded ? "Collapse" : "Expand details"}>
           <span style={{ fontSize: 18 }}>{paper.credibility_icon}</span>
           <span style={S.pScore}>{paper.scores.overall.toFixed(2)}</span>
-          <span style={{ fontSize: 10, opacity: 0.5, marginLeft: 4 }}>{expanded ? "▲" : "▼"}</span>
-        </button>
+          <span style={{ fontSize: 10, color: "#4ade80", marginTop: 2 }}>{expanded ? "▲ hide" : "▼ details"}</span>
+        </div>
       </div>
 
       {expanded && (
@@ -243,7 +244,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
           </div>
           {paper.suggested_combinations.length > 0 && (
             <div style={S.cBox}>
-              <div style={S.cTitle}>💡 Suggested Combinations</div>
+              <div style={S.cTitle}>💡 Experiment idea from this paper</div>
               {paper.suggested_combinations.map((c) => (
                 <div key={c} style={S.cLine}>{c}</div>
               ))}
@@ -1657,7 +1658,7 @@ const S = {
   pMeta: { fontSize: 12, color: "#64748b", marginTop: 4, display: "flex", alignItems: "center", gap: 4, flexWrap: "wrap" },
   dot: { color: "#334155" },
   pBadge: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 48 },
-  pBadgeBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 48, background: "none", border: "none", cursor: "pointer", padding: "4px 6px", borderRadius: 6 },
+  pBadgeBtn: { display: "flex", flexDirection: "column", alignItems: "center", gap: 2, minWidth: 48, padding: "4px 6px", borderRadius: 6 },
   pScore: { fontSize: 13, fontWeight: 700, color: "#fbbf24" },
   pExp: { marginTop: 16, paddingTop: 16, borderTop: "1px solid #1e293b" },
   sGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", marginBottom: 16 },
