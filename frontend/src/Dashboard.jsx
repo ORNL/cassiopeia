@@ -200,7 +200,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
   const paperUrl = paper.doi ? `https://doi.org/${paper.doi}` : paper.url;
 
   return (
-    <div style={{ ...S.pCard, ...(expanded ? { borderColor: "#334155" } : {}) }} onClick={onToggle}>
+    <div style={{ ...S.pCard, ...(expanded ? { borderColor: "#334155" } : {}) }}>
       <div style={S.pHead}>
         <div style={S.pRank}>#{paper.rank}</div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -221,11 +221,15 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
             <span>{paper.published?.slice(0, 7)}</span>
           </div>
         </div>
-        <div style={S.pBadgeBtn} aria-label={expanded ? "Collapse" : "Expand details"}>
+        <button
+          style={{ ...S.pBadgeBtn, background: "none", border: "none", cursor: "pointer" }}
+          onClick={(e) => { e.stopPropagation(); onToggle(); }}
+          aria-label={expanded ? "Collapse" : "Expand details"}
+        >
           <span style={{ fontSize: 18 }}>{paper.credibility_icon}</span>
           <span style={S.pScore}>{paper.scores.overall.toFixed(2)}</span>
           <span style={{ fontSize: 10, color: "#4ade80", marginTop: 2 }}>{expanded ? "▲ hide" : "▼ details"}</span>
-        </div>
+        </button>
       </div>
 
       {expanded && (
@@ -569,6 +573,11 @@ RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate
 
 const COMBO_PAGE_SIZES = [5, 10, 20, 50, 100];
 
+function buildCountLabel(filtered, total, category) {
+  const suffix = category ? ` ${category}` : "";
+  return filtered === total ? `${total}${suffix}` : `${filtered} / ${total}${suffix}`;
+}
+
 function filterCombos(items, speciesF, stressF) {
   let out = items;
   if (speciesF.length > 0) out = out.filter((c) => speciesF.some((s) => (c.matched_species  || []).includes(s)));
@@ -580,13 +589,14 @@ function toggleTerm(arr, term) {
   return arr.includes(term) ? arr.filter((x) => x !== term) : [...arr, term];
 }
 
-function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, pageSize, setPageSize, total, filtered }) {
+function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, total, filtered, category }) {
   const availSp = [...new Set(items.flatMap((c) => c.matched_species  || []))];
   const availSt = [...new Set(items.flatMap((c) => c.matched_stresses || []))];
+  const countLabel = buildCountLabel(filtered, total, category);
   return (<>
     {availSp.length > 0 && (
       <div style={{ ...S.fBar, marginBottom: 8 }}>
-        <span style={S.fLabel}>Species:</span>
+        <span style={S.fFilterLabel}>Species:</span>
         <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
         {availSp.map((s) => (
           <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
@@ -597,7 +607,7 @@ function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, pag
     )}
     {availSt.length > 0 && (
       <div style={{ ...S.fBar, marginBottom: 8 }}>
-        <span style={S.fLabel}>Stress:</span>
+        <span style={S.fFilterLabel}>Stress:</span>
         <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
         {availSt.map((s) => (
           <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
@@ -606,35 +616,41 @@ function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, pag
         ))}
       </div>
     )}
-    <div style={{ ...S.fBar, marginBottom: 16 }}>
-      <span style={S.fLabel}>Per page:</span>
-      {COMBO_PAGE_SIZES.map((n) => (
-        <button key={n} onClick={() => setPageSize(n)} style={{ ...S.fBtn, ...(pageSize === n ? S.fOn : {}) }}>{n}</button>
-      ))}
-      <span style={{ marginLeft: "auto", fontSize: 12, color: "#4b5563" }}>
-        {filtered === total ? total : `${filtered} / ${total}`}
-      </span>
-    </div>
+    <div style={{ textAlign: "right", fontSize: 12, color: "#64748b", marginBottom: 12 }}>{countLabel}</div>
   </>);
 }
 
-ComboFilterBar.propTypes = { items: PropTypes.array, speciesF: PropTypes.array, setSpeciesF: PropTypes.func, stressF: PropTypes.array, setStressF: PropTypes.func, pageSize: PropTypes.number, setPageSize: PropTypes.func, total: PropTypes.number, filtered: PropTypes.number };
+ComboFilterBar.propTypes = { items: PropTypes.array, speciesF: PropTypes.array, setSpeciesF: PropTypes.func, stressF: PropTypes.array, setStressF: PropTypes.func, total: PropTypes.number, filtered: PropTypes.number, category: PropTypes.string };
 
-function ComboPagination({ page, setPage, pageCount }) {
-  if (pageCount <= 1) return null;
+function ComboPagination({ page, setPage, pageCount, pageSize, setPageSize, pageSizes }) {
+  const hasPaging  = pageCount > 1;
+  const hasPerPage = !!setPageSize;
+  if (!hasPaging && !hasPerPage) return null;
   const safe = Math.min(page, pageCount - 1);
   return (
-    <div style={S.pgBar}>
-      <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safe === 0}
-        style={{ ...S.pgBtn, ...(safe === 0 ? S.pgBtnDis : {}) }}>← Prev</button>
-      <span style={S.pgInfo}>Page {safe + 1} of {pageCount}</span>
-      <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={safe === pageCount - 1}
-        style={{ ...S.pgBtn, ...(safe === pageCount - 1 ? S.pgBtnDis : {}) }}>Next →</button>
+    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 20, paddingTop: 16, borderTop: "1px solid #1e293b" }}>
+      {hasPaging ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safe === 0}
+            style={{ ...S.pgBtn, ...(safe === 0 ? S.pgBtnDis : {}) }}>← Prev</button>
+          <span style={S.pgInfo}>Page {safe + 1} of {pageCount}</span>
+          <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={safe === pageCount - 1}
+            style={{ ...S.pgBtn, ...(safe === pageCount - 1 ? S.pgBtnDis : {}) }}>Next →</button>
+        </div>
+      ) : <div />}
+      {hasPerPage && (
+        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+          <span style={S.fLabel}>Per page:</span>
+          {(pageSizes || COMBO_PAGE_SIZES).map((n) => (
+            <button key={n} onClick={() => setPageSize(n)} style={{ ...S.fBtn, ...(pageSize === n ? S.fOn : {}) }}>{n}</button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-ComboPagination.propTypes = { page: PropTypes.number, setPage: PropTypes.func, pageCount: PropTypes.number };
+ComboPagination.propTypes = { page: PropTypes.number, setPage: PropTypes.func, pageCount: PropTypes.number, pageSize: PropTypes.number, setPageSize: PropTypes.func, pageSizes: PropTypes.array };
 
 function ProposalsTab({ ragCombos, ratings, onRate, papers, synthesisPaperMeta }) {
   const [speciesF, setSpeciesF]   = useState([]);
@@ -677,11 +693,11 @@ function ProposalsTab({ ragCombos, ratings, onRate, papers, synthesisPaperMeta }
         <span style={S.ragBadge}>RAG · cross-paper</span>
       </div>
       <p style={S.cardSub}>Novel experiment designs reasoned over multiple papers together</p>
-      <ComboFilterBar items={ragCombos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={ragCombos.length} filtered={filtered.length} />
+      <ComboFilterBar items={ragCombos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={ragCombos.length} filtered={filtered.length} category="proposals" />
       {paged.map((c) => (
         <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} />
       ))}
-      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} />
     </div>
   );
 }
@@ -718,7 +734,7 @@ function HypothesesTab({ combos }) {
     <div style={S.card}>
       <h3 style={S.cardH}>Per-Paper Hypotheses</h3>
       <p style={S.cardSub}>One-sentence ideas generated per paper during scoring — quick signals, not cross-paper reasoning</p>
-      <ComboFilterBar items={combos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={combos.length} filtered={filtered.length} />
+      <ComboFilterBar items={combos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={combos.length} filtered={filtered.length} category="hypotheses" />
       {paged.map((c) => (
         <div key={c.source_doi || c.suggestion} style={S.comboCard}>
           <div style={{ fontSize: 14, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 8 }}>{c.suggestion}</div>
@@ -737,7 +753,7 @@ function HypothesesTab({ combos }) {
           </div>
         </div>
       ))}
-      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} />
     </div>
   );
 }
@@ -777,7 +793,7 @@ function ContradictionsTab({ contradictions }) {
         <span style={{ ...S.ragBadge, borderColor: "#7c3a1a", color: "#fb923c", background: "#1a0e06" }}>{contradictions.length} found</span>
       </div>
       <p style={S.cardSub}>Papers in your knowledge base that present conflicting or irreconcilable findings</p>
-      <ComboFilterBar items={contradictions} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} pageSize={pageSize} setPageSize={setPageSize} total={contradictions.length} filtered={filtered.length} />
+      <ComboFilterBar items={contradictions} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={contradictions.length} filtered={filtered.length} category="contradictions" />
       {paged.map((c) => (
         <div key={[...c.papers].sort((a, b) => a.localeCompare(b)).join("|")} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
@@ -800,12 +816,128 @@ function ContradictionsTab({ contradictions }) {
           )}
         </div>
       ))}
-      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} />
+      <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} />
     </div>
   );
 }
 
 ContradictionsTab.propTypes = { contradictions: PropTypes.array };
+
+function ResultsTab({ papers, newPaperIds, newSince }) {
+  const [credF, setCredF]             = useState("all");
+  const [speciesF, setSpeciesF]       = useState([]);
+  const [stressF, setStressF]         = useState([]);
+  const [sortKey, setSortKey]         = useState("overall");
+  const [pageSize, setPageSize]       = useState(20);
+  const [page, setPage]               = useState(0);
+  const [showNewOnly, setShowNewOnly] = useState(false);
+  const [expPaper, setExpPaper]       = useState(null);
+
+  const filtered = useMemo(
+    () => filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey),
+    [papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey],
+  );
+
+  const { availableSpecies, availableStresses } = useMemo(() => ({
+    availableSpecies:  [...new Set(papers.flatMap((p) => p.matched_species  || []))],
+    availableStresses: [...new Set(papers.flatMap((p) => p.matched_stresses || []))],
+  }), [papers]);
+
+  useEffect(() => { setPage(0); }, [papers, credF, speciesF, stressF, sortKey, pageSize, showNewOnly]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage  = Math.min(page, pageCount - 1);
+  const paged     = useMemo(
+    () => filtered.slice(safePage * pageSize, (safePage + 1) * pageSize),
+    [filtered, safePage, pageSize],
+  );
+
+  const newInResults = papers.filter((p) => newPaperIds.has(p.paper_id)).length;
+
+  if (papers.length === 0) {
+    return (
+      <div style={S.empty}>
+        <span style={{ fontSize: 48 }}>📚</span>
+        <p style={{ color: "#94a3b8", marginTop: 12 }}>No results yet. Configure your profile and run a literature scan.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div style={S.card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <h3 style={S.cardH}>Paper Knowledge Base</h3>
+        <span style={S.ragBadge}>{papers.length} papers</span>
+      </div>
+      <p style={S.cardSub}>Scored and ranked against your research profile — combine filters and sort to explore</p>
+
+      {availableSpecies.length > 0 && (
+        <div style={{ ...S.fBar, marginBottom: 8 }}>
+          <span style={S.fFilterLabel}>Species:</span>
+          <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
+          {availableSpecies.map((s) => (
+            <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
+              {s.charAt(0).toUpperCase() + s.slice(1)}
+            </button>
+          ))}
+        </div>
+      )}
+      {availableStresses.length > 0 && (
+        <div style={{ ...S.fBar, marginBottom: 8 }}>
+          <span style={S.fFilterLabel}>Stress:</span>
+          <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
+          {availableStresses.map((s) => (
+            <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
+              {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
+            </button>
+          ))}
+        </div>
+      )}
+      <div style={{ ...S.fBar, marginBottom: 0 }}>
+        <span style={S.fFilterLabel}>Credibility:</span>
+        {["all", "high", "moderate", "preliminary", "conflicting"].map((f) => (
+          <button key={f} onClick={() => setCredF(f)} style={{ ...S.fBtn, ...(credF === f ? S.fOn : {}) }}>
+            {f === "all" ? "All" : `${CREDIBILITY_ICONS[f]} ${f.charAt(0).toUpperCase() + f.slice(1)}`}
+          </button>
+        ))}
+        {newInResults > 0 && (
+          <button
+            onClick={() => setShowNewOnly((v) => !v)}
+            style={{ ...S.fBtn, ...(showNewOnly ? S.fNewOn : S.fNew), marginLeft: 12 }}
+            title={newSince ? `Papers added since ${new Date(newSince).toLocaleString()}` : "Papers added since your last visit"}
+          >
+            🆕 New ({newInResults})
+          </button>
+        )}
+        <span style={{ marginLeft: "auto", fontSize: 12, color: "#64748b" }}>
+          {filtered.length === papers.length ? papers.length : `${filtered.length} / ${papers.length}`} papers
+        </span>
+      </div>
+      <div style={{ ...S.fBar, borderTop: "1px solid #1e293b", paddingTop: 12, marginTop: 12, marginBottom: 16 }}>
+        <span style={S.fFilterLabel}>Sort:</span>
+        {SORT_OPTIONS.map((o) => (
+          <button key={o.key} onClick={() => setSortKey(o.key)} title={o.title} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
+            {o.label}
+          </button>
+        ))}
+      </div>
+      {paged.map((p) => (
+        <PaperCard key={p.paper_id || p.rank} paper={p}
+          expanded={expPaper === (p.paper_id || p.rank)}
+          onToggle={() => { const k = p.paper_id || p.rank; setExpPaper(expPaper === k ? null : k); }}
+          isNew={newPaperIds.has(p.paper_id)}
+        />
+      ))}
+      <ComboPagination page={safePage} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} pageSizes={PAGE_SIZES} />
+    </div>
+  );
+}
+
+ResultsTab.propTypes = {
+  papers: PropTypes.array.isRequired,
+  newPaperIds: PropTypes.instanceOf(Set),
+  newSince: PropTypes.string,
+};
 
 const SESSION_PAGE = 3;
 
@@ -1040,7 +1172,7 @@ async function loadAndApplyProfile(researcherId, setSpecies, setStresses, setSou
   } catch { /* silent */ }
 }
 
-async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos, setPage) {
+async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos) {
   try {
     const r = await fetch(`/api/researcher/${researcherId}/results`);
     if (!r.ok) return;
@@ -1050,7 +1182,6 @@ async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMet
       setSynthesisPaperMeta(d.synthesis_paper_meta || {});
       setCombos(d.combos || []);
       setRagCombos(d.rag_combos || []);
-      setPage(0);
     }
   } catch { /* silent */ }
 }
@@ -1177,7 +1308,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [timeRange, setTimeRange] = useState(12);
 
   const [tab, setTab] = useState(getInitialTab);
-  const [expPaper, setExpPaper] = useState(null);
   const [extractedKeywords, setExtractedKeywords] = useState([]);
   const [kwLoading, setKwLoading] = useState(false);
   const [showProgress, setShowProgress] = useState(false);
@@ -1193,13 +1323,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [anchorResults, setAnchorResults] = useState([]);
   const [anchorLoading, setAnchorLoading] = useState(false);
   const [sessions, setSessions] = useState([]);
-  const [credF, setCredF] = useState("all");
-  const [speciesF, setSpeciesF] = useState([]);
-  const [stressF, setStressF] = useState([]);
-  const [sortKey, setSortKey] = useState("overall");
-  const [pageSize, setPageSize] = useState(20);
-  const [page, setPage] = useState(0);
-  const [showNewOnly, setShowNewOnly] = useState(false);
   const [newPaperIds, setNewPaperIds] = useState(new Set());
   const [newSince, setNewSince] = useState(null);
   const [agentStatus, setAgentStatus] = useState(null);
@@ -1223,7 +1346,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   // Restore profile, last results, contradictions, and new-paper markers on mount
   useEffect(() => {
     loadAndApplyProfile(RESEARCHER_ID, setSpecies, setStresses, setSources, setTimeRange);
-    loadRestoredResults(RESEARCHER_ID, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos, setPage);
+    loadRestoredResults(RESEARCHER_ID, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos);
     loadRestoredContradictions(RESEARCHER_ID, setContradictions);
     loadNewPapers(RESEARCHER_ID, setNewPaperIds, setNewSince);
   }, [RESEARCHER_ID]);
@@ -1268,7 +1391,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
       setRagCombos(data.rag_combos || []);
-      setPage(0);
       setTab("results");
       refreshSessions();
       pollForContradictions(RESEARCHER_ID, setContradictions);
@@ -1279,25 +1401,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setSearching(false);
     }
   }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions]);
-
-  const filtered = useMemo(
-    () => filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey),
-    [papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey],
-  );
-
-  const { availableSpecies, availableStresses } = useMemo(() => ({
-    availableSpecies:  [...new Set(papers.flatMap((p) => p.matched_species  || []))],
-    availableStresses: [...new Set(papers.flatMap((p) => p.matched_stresses || []))],
-  }), [papers]);
-
-  useEffect(() => { setPage(0); }, [credF, speciesF, stressF, sortKey, pageSize, showNewOnly]);
-
-  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const safePage  = Math.min(page, pageCount - 1);
-  const paged     = useMemo(
-    () => filtered.slice(safePage * pageSize, (safePage + 1) * pageSize),
-    [filtered, safePage, pageSize],
-  );
 
   const isAgentReady = agentStatus?.status === "running";
 
@@ -1424,7 +1527,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
             </button>
 
             {/* Anchor paper search */}
-            <div style={S.card}>
+            <div style={{ ...S.card, marginTop: 20 }}>
               <h3 style={S.cardH}>Anchor Paper Search</h3>
               <p style={S.cardSub}>Enter a DOI or title fragment to find similar papers in your knowledge base</p>
               <div style={{ display: "flex", gap: 10 }}>
@@ -1459,85 +1562,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
         {/* ═══ RESULTS ═══ */}
         {tab === "results" && (
-          <div>
-            {papers.length === 0 ? (
-              <div style={S.empty}><span style={{ fontSize: 48 }}>📚</span><p style={{ color: "#94a3b8", marginTop: 12 }}>No results yet. Configure your profile and run a literature scan.</p></div>
-            ) : (<>
-              {/* Filter row */}
-              <div style={S.fBar}>
-                <span style={S.fLabel}>Credibility:</span>
-                {["all", "high", "moderate", "preliminary", "conflicting"].map((f) => (
-                  <button key={f} onClick={() => setCredF(f)} style={{ ...S.fBtn, ...(credF === f ? S.fOn : {}) }}>
-                    {f === "all" ? "All" : `${CREDIBILITY_ICONS[f]} ${f.charAt(0).toUpperCase() + f.slice(1)}`}
-                  </button>
-                ))}
-                {newInResults > 0 && (
-                  <button
-                    onClick={() => setShowNewOnly((v) => !v)}
-                    style={{ ...S.fBtn, ...(showNewOnly ? S.fNewOn : S.fNew), marginLeft: 12 }}
-                    title={newSince ? `Papers added since ${new Date(newSince).toLocaleString()}` : "Papers added since your last visit"}
-                  >
-                    🆕 New ({newInResults})
-                  </button>
-                )}
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "#4b5563" }}>
-                  {filtered.length === papers.length ? papers.length : `${filtered.length} / ${papers.length}`} papers
-                </span>
-              </div>
-              {/* Species filter row */}
-              {availableSpecies.length > 0 && (
-                <div style={{ ...S.fBar, marginBottom: 8 }}>
-                  <span style={S.fLabel}>Species:</span>
-                  <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
-                  {availableSpecies.map((s) => (
-                    <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
-                      {s.charAt(0).toUpperCase() + s.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {/* Stress filter row */}
-              {availableStresses.length > 0 && (
-                <div style={{ ...S.fBar, marginBottom: 8 }}>
-                  <span style={S.fLabel}>Stress:</span>
-                  <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
-                  {availableStresses.map((s) => (
-                    <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
-                      {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
-                    </button>
-                  ))}
-                </div>
-              )}
-              {/* Sort + page-size row */}
-              <div style={{ ...S.fBar, marginBottom: 16 }}>
-                <span style={S.fLabel}>Sort:</span>
-                {SORT_OPTIONS.map((o) => (
-                  <button key={o.key} onClick={() => setSortKey(o.key)} title={o.title} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
-                    {o.label}
-                  </button>
-                ))}
-                <span style={{ ...S.fLabel, marginLeft: "auto" }}>Per page:</span>
-                {PAGE_SIZES.map((n) => (
-                  <button key={n} onClick={() => setPageSize(n)} style={{ ...S.fBtn, ...(pageSize === n ? S.fOn : {}) }}>
-                    {n}
-                  </button>
-                ))}
-              </div>
-              {paged.map((p) => (
-                <PaperCard key={p.paper_id || p.rank} paper={p} expanded={expPaper === (p.paper_id || p.rank)} onToggle={() => { const k = p.paper_id || p.rank; setExpPaper(expPaper === k ? null : k); }} isNew={newPaperIds.has(p.paper_id)} />
-              ))}
-              {/* Pagination */}
-              {pageCount > 1 && (
-                <div style={S.pgBar}>
-                  <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0}
-                    style={{ ...S.pgBtn, ...(safePage === 0 ? S.pgBtnDis : {}) }}>← Prev</button>
-                  <span style={S.pgInfo}>Page {safePage + 1} of {pageCount}</span>
-                  <button onClick={() => setPage((p) => Math.min(pageCount - 1, p + 1))} disabled={safePage === pageCount - 1}
-                    style={{ ...S.pgBtn, ...(safePage === pageCount - 1 ? S.pgBtnDis : {}) }}>Next →</button>
-                </div>
-              )}
-            </>)}
-          </div>
+          <ResultsTab papers={papers} newPaperIds={newPaperIds} newSince={newSince} />
         )}
 
         {/* ═══ AI PROPOSALS ═══ */}
@@ -1641,6 +1666,7 @@ const S = {
 
   fBar: { display: "flex", alignItems: "center", gap: 8, marginBottom: 20, flexWrap: "wrap" },
   fLabel: { fontSize: 12, color: "#64748b", fontWeight: 600 },
+  fFilterLabel: { fontSize: 12, color: "#64748b", fontWeight: 600, minWidth: 82, flexShrink: 0 },
   fBtn: { padding: "6px 12px", borderRadius: 16, border: "1px solid #334155", background: "#1e293b", color: "#94a3b8", fontSize: 12, cursor: "pointer", transition: "all 0.15s" },
   fOn: { background: "#164e3f", borderColor: "#4ade80", color: "#4ade80" },
   fNew: { borderColor: "#7c3aed", color: "#a78bfa" },
