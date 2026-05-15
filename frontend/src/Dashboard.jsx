@@ -806,6 +806,58 @@ function ContradictionsTab({ contradictions }) {
 
 ContradictionsTab.propTypes = { contradictions: PropTypes.array };
 
+const SESSION_PAGE = 3;
+
+function SessionHistory({ sessions }) {
+  const [offset, setOffset] = useState(0);
+  const maxOffset = Math.max(0, sessions.length - SESSION_PAGE);
+  const visible   = sessions.slice(offset, offset + SESSION_PAGE);
+
+  return (
+    <div style={S.card}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
+        <h3 style={S.cardH}>Previous Sessions</h3>
+        {sessions.length > SESSION_PAGE && (
+          <span style={{ fontSize: 12, color: "#64748b" }}>{sessions.length} total</span>
+        )}
+      </div>
+      <p style={S.cardSub}>Recent searches for this profile</p>
+      {visible.map((s) => {
+        const p = s.profile;
+        const rangeLabel = formatSessionMonths(p.time_range_months);
+        return (
+          <div key={s.session_id} style={S.sessionRow}>
+            <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
+              <span style={S.sessionDate}>{s.timestamp.slice(0, 16).replace("T", " ")}</span>
+              <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
+            </div>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
+              {(p.plant_species  || []).map((v) => <span key={v} style={S.sesChip}>{v}</span>)}
+              {(p.stress_types   || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipStress }}>{v}</span>)}
+              {(p.source_targets || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipSrc }}>{v}</span>)}
+              {rangeLabel && <span style={{ ...S.sesChip, ...S.sesChipRange }}>{rangeLabel}</span>}
+            </div>
+          </div>
+        );
+      })}
+      {maxOffset > 0 && (
+        <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #1e293b" }}>
+          <div style={{ fontSize: 11, color: "#64748b", marginBottom: 6 }}>
+            Showing {offset + 1}–{Math.min(offset + SESSION_PAGE, sessions.length)} of {sessions.length}
+          </div>
+          <input
+            type="range" min={0} max={maxOffset} value={offset}
+            onChange={(e) => setOffset(Number(e.target.value))}
+            style={S.range}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+SessionHistory.propTypes = { sessions: PropTypes.array };
+
 // ─────────────────────────────────────────────────
 // Module-level helpers (excluded from Dashboard cognitive complexity)
 // ─────────────────────────────────────────────────
@@ -1360,6 +1412,16 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               </div>
             </div>
 
+            {searchError && (
+              <div style={S.errBox}>{searchError}</div>
+            )}
+
+            <button onClick={doSearch} disabled={searching || !isAgentReady || (!species.length && !stresses.length)}
+              style={{ ...S.goBtn, ...((searching || !isAgentReady || (!species.length && !stresses.length)) ? S.goDis : {}) }}
+            >
+              {searchBtnLabel}
+            </button>
+
             {/* Anchor paper search */}
             <div style={S.card}>
               <h3 style={S.cardH}>Anchor Paper Search</h3>
@@ -1390,41 +1452,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
             </div>
 
             {/* Session history */}
-            {sessions.length > 0 && (
-              <div style={S.card}>
-                <h3 style={S.cardH}>Previous Sessions</h3>
-                <p style={S.cardSub}>Recent searches for this profile</p>
-                {sessions.slice(0, 8).map((s) => {
-                  const p = s.profile;
-                  const months = p.time_range_months;
-                  const rangeLabel = formatSessionMonths(months);
-                  return (
-                    <div key={s.session_id} style={S.sessionRow}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
-                        <span style={S.sessionDate}>{s.timestamp.slice(0, 16).replace("T", " ")}</span>
-                        <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
-                      </div>
-                      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
-                        {(p.plant_species || []).map((v) => <span key={v} style={S.sesChip}>{v}</span>)}
-                        {(p.stress_types || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipStress }}>{v}</span>)}
-                        {(p.source_targets || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipSrc }}>{v}</span>)}
-                        {rangeLabel && <span style={{ ...S.sesChip, ...S.sesChipRange }}>{rangeLabel}</span>}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {searchError && (
-              <div style={S.errBox}>{searchError}</div>
-            )}
-
-            <button onClick={doSearch} disabled={searching || !isAgentReady || (!species.length && !stresses.length)}
-              style={{ ...S.goBtn, ...((searching || !isAgentReady || (!species.length && !stresses.length)) ? S.goDis : {}) }}
-            >
-              {searchBtnLabel}
-            </button>
+            {sessions.length > 0 && <SessionHistory sessions={sessions} />}
           </div>
         )}
 
