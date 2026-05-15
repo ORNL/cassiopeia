@@ -1587,7 +1587,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
         )}
       </main>
 
-      <footer style={S.footer}>APPL Facility · Academy Agent Framework · CASSIOPEIA v0.1</footer>
+      <footer style={S.footer}>OPAL · CASSIOPEIA v0.1</footer>
       {showProgress && (
         <ProgressModal
           researcherId={RESEARCHER_ID}

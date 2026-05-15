@@ -18,10 +18,9 @@ export default function LandingPage({ onLogin, pending }) {
     <div style={S.root}>
       <div style={S.hero}>
         <div style={S.badge}>CASSIOPEIA</div>
-        <h1 style={S.title}>Find the papers that matter to your research</h1>
+        <h1 style={S.title}>Find the papers that {"\n"}<br/> matter to your research</h1>
         <p style={S.sub}>
-          Searches bioRxiv, PubMed, arXiv, Frontiers, PLoS ONE and more —
-          scored and ranked against your research profile.
+          An Opal service
         </p>
       </div>
 

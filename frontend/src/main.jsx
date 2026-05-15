@@ -131,7 +131,7 @@ function PriorityModal({ priorities, scanSettings, onSave, onClose }) {
             <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>AI Critique</span>
           </label>
           <p style={{ ...MS.sub, margin: "4px 0 0 26px" }}>
-            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra Sonnet calls).
+            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra LLM calls).
           </p>
         </div>
 
@@ -209,7 +209,7 @@ function PrioritySetupStep({ name, onSave }) {
             <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>AI Critique</span>
           </label>
           <p style={{ ...MS.sub, margin: "4px 0 0 26px" }}>
-            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra Sonnet calls).
+            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra LLM calls).
           </p>
         </div>
 
