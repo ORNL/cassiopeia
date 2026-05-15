@@ -3,6 +3,7 @@
 
 import { useState } from "react";
 import PropTypes from "prop-types";
+import logo from "./assets/logo.png";
 
 export default function LandingPage({ onLogin, pending }) {
   const [input, setInput] = useState("");
@@ -17,7 +18,7 @@ export default function LandingPage({ onLogin, pending }) {
   return (
     <div style={S.root}>
       <div style={S.hero}>
-        <div style={S.badge}>CASSIOPEIA</div>
+        <img src={logo} alt="Cassiopeia" style={S.logo} />
         <h1 style={S.title}>Find the papers that {"\n"}<br/> matter to your research</h1>
         <p style={S.sub}>
           An Opal service
@@ -71,17 +72,9 @@ const S = {
     maxWidth: 600,
     marginBottom: 40,
   },
-  badge: {
-    display: "inline-block",
-    fontSize: 28,
-    fontWeight: 800,
-    letterSpacing: "0.18em",
-    textTransform: "uppercase",
-    color: "#4ade80",
-    background: "#0f2d1f",
-    border: "1px solid #166534",
-    borderRadius: 12,
-    padding: "10px 28px",
+  logo: {
+    height: 300,
+    width: "auto",
     marginBottom: 24,
   },
   title: {
