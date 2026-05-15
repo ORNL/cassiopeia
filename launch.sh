@@ -58,10 +58,10 @@ if [[ -z "$ANTHROPIC_API_KEY" && -z "$OPENAI_API_KEY" && -z "$AZURE_API_KEY" && 
 fi
 
 API_PORT="${API_PORT:-8000}"
-CHAINLIT_PORT="${CHAINLIT_PORT:-8001}"
+# CHAINLIT_PORT="${CHAINLIT_PORT:-8001}"  # Chainlit disabled
 
 # ── Port conflict check ───────────────────────────────────────────────────────
-for _port in "$API_PORT" "$CHAINLIT_PORT"; do
+for _port in "$API_PORT"; do
     if ss -tlnH "sport = :$_port" 2>/dev/null | grep -q .; then
         echo "ERROR: port $_port is already in use."
         echo "  If the Docker stack is running: docker compose down"
@@ -89,11 +89,11 @@ tmux new-session -d -s "$SESSION" -x 220 -y 50
 tmux rename-window -t "$SESSION:0" "api"
 tmux send-keys -t "$SESSION:0" "cd '$SCRIPT_DIR' && uvicorn api_server:app --port $API_PORT" Enter
 
-# Window 1 — Chainlit chat
-tmux new-window -t "$SESSION" -n "chat"
-tmux send-keys -t "$SESSION:chat" "cd '$SCRIPT_DIR' && chainlit run chainlit_app.py --port $CHAINLIT_PORT --headless" Enter
+# Window 1 — Chainlit chat (disabled)
+# tmux new-window -t "$SESSION" -n "chat"
+# tmux send-keys -t "$SESSION:chat" "cd '$SCRIPT_DIR' && chainlit run chainlit_app.py --port $CHAINLIT_PORT --headless" Enter
 
-# Window 2 — React dashboard
+# Window 1 — React dashboard
 tmux new-window -t "$SESSION" -n "dashboard"
 tmux send-keys -t "$SESSION:dashboard" "cd '$SCRIPT_DIR/frontend' && npm run dev" Enter
 
@@ -102,8 +102,8 @@ tmux select-window -t "$SESSION:api"
 
 echo "Cassiopeia started in tmux session '$SESSION'."
 echo "  API server  → http://localhost:$API_PORT"
-echo "  Chat        → http://localhost:$CHAINLIT_PORT"
 echo "  Dashboard   → http://localhost:5173"
+# echo "  Chat        → http://localhost:$CHAINLIT_PORT"  (Chainlit disabled)
 echo ""
 
 # Open the dashboard in the default browser after a short delay

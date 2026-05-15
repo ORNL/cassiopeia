@@ -24,29 +24,27 @@ services:
       retries: 10
       start_period: 120s
 
-  # ── Chainlit chat interface ─────────────────────────────────────────────────
-  chat:
-    build: .
-    command: chainlit run chainlit_app.py --host 0.0.0.0 --port 8001 --headless
-    ports:
-      - "${CHAINLIT_PORT:-8001}:8001"
-    env_file: .env
-    environment:
-      DB_PATH: /app/data/cassiopeia.db
-      RAG_PERSIST_DIR: /app/data/chroma_db
-      DISABLE_SSL_VERIFY: "true"
-      # Server-side URL to reach the API — uses Docker's internal network
-      API_BASE_URL: http://api:8000
-      # User-facing URLs remain localhost (browser connects directly)
-      CHAINLIT_URL: http://localhost:${CHAINLIT_PORT:-8001}
-      DASHBOARD_URL: http://localhost:5173
-    volumes:
-      - cassiopeia_data:/app/data
-      - chainlit_files:/app/.files
-    depends_on:
-      api:
-        condition: service_healthy
-    restart: unless-stopped
+  # ── Chainlit chat interface (disabled) ────────────────────────────────────
+  # chat:
+  #   build: .
+  #   command: chainlit run chainlit_app.py --host 0.0.0.0 --port 8001 --headless
+  #   ports:
+  #     - "${CHAINLIT_PORT:-8001}:8001"
+  #   env_file: .env
+  #   environment:
+  #     DB_PATH: /app/data/cassiopeia.db
+  #     RAG_PERSIST_DIR: /app/data/chroma_db
+  #     DISABLE_SSL_VERIFY: "true"
+  #     API_BASE_URL: http://api:8000
+  #     CHAINLIT_URL: http://localhost:${CHAINLIT_PORT:-8001}
+  #     DASHBOARD_URL: http://localhost:5173
+  #   volumes:
+  #     - cassiopeia_data:/app/data
+  #     - chainlit_files:/app/.files
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   restart: unless-stopped
 
   # ── React dashboard ─────────────────────────────────────────────────────────
   dashboard:
@@ -58,4 +56,4 @@ services:
 
 volumes:
   cassiopeia_data:   # SQLite DB + ChromaDB
-  chainlit_files:    # Chainlit uploaded-file storage
+  # chainlit_files:  # Chainlit uploaded-file storage (disabled)
