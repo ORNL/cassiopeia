@@ -269,7 +269,7 @@ function App() {
     if (savedScan) setScanSettings(savedScan);
     if (savedPriorities) {
       setPriorities(savedPriorities);
-      // mode stays null → LandingPage shows the interface-choice cards
+      setMode("dashboard");
     } else {
       setMode("setup");
     }
@@ -283,7 +283,7 @@ function App() {
       storeScanSettings(researcher.id, scan);
     }
     setShowSettings(false);
-    if (mode === "setup") setMode(null); // proceed to interface choice
+    if (mode === "setup") setMode("dashboard");
   };
 
   // Setup step only saves priorities; scan settings use defaults until first modal open
@@ -299,7 +299,7 @@ function App() {
     return (
       <>
         <Dashboard
-          onBack={() => setMode(null)}
+          onBack={() => { setResearcher(null); setMode(null); }}
           researcherName={researcher.name}
           researcherId={researcher.id}
           priorities={priorities}
@@ -336,7 +336,7 @@ function App() {
       </>
     );
 
-  return <LandingPage researcher={researcher} onLogin={handleLogin} onSelect={setMode} />;
+  return <LandingPage onLogin={handleLogin} />;
 }
 
 createRoot(document.getElementById("root")).render(
