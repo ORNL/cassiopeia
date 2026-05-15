@@ -324,7 +324,13 @@ class ArxivFetcher(BaseFetcher):
 
         logger.info("arXiv fetch [%s]: %s", query.researcher_id, terms)
 
-        for attempt in range(2):
+        # arXiv rate-limits aggressively; retry with exponential backoff on 429/503
+        _RETRY_DELAYS = [15, 45, 120]
+        text = None
+        for attempt, delay in enumerate([0] + _RETRY_DELAYS):
+            if delay:
+                logger.info("arXiv retry %d/%d in %d s…", attempt, len(_RETRY_DELAYS), delay)
+                await asyncio.sleep(delay)
             try:
                 async with _session() as session:
                     async with session.get(
@@ -332,25 +338,23 @@ class ArxivFetcher(BaseFetcher):
                         params=params,
                         timeout=aiohttp.ClientTimeout(total=60),
                     ) as resp:
+                        if resp.status in (429, 503):
+                            logger.warning("arXiv returned %d", resp.status)
+                            if attempt < len(_RETRY_DELAYS):
+                                continue
+                            return []
                         if resp.status != 200:
                             logger.warning("arXiv returned %d", resp.status)
                             return []
                         text = await resp.text()
-                break
+                        break
             except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                if attempt == 0:
-                    logger.warning(
-                        "arXiv %s on attempt 1, retrying in 5 s…",
-                        type(exc).__name__,
-                    )
-                    await asyncio.sleep(5)
-                else:
-                    logger.warning(
-                        "arXiv network error after 2 attempts: %s: %s",
-                        type(exc).__name__, exc,
-                    )
+                logger.warning("arXiv network error (attempt %d): %s: %s", attempt + 1, type(exc).__name__, exc)
+                if attempt >= len(_RETRY_DELAYS):
                     return []
 
+        if text is None:
+            return []
         return self._parse_atom(text)
 
     async def fetch_full_text(self, paper_id: str) -> str | None:
