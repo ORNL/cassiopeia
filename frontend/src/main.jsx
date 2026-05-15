@@ -174,7 +174,8 @@ PriorityModal.propTypes = {
 // ── PrioritySetupStep ─────────────────────────────────────────────────────────
 
 function PrioritySetupStep({ name, onSave }) {
-  const [prefs, setPrefs] = useState({ ...DEFAULT_PRIORITIES });
+  const [prefs, setPrefs]     = useState({ ...DEFAULT_PRIORITIES });
+  const [scan,  setScan]      = useState({ ...DEFAULT_SCAN_SETTINGS });
   const set = (k) => (v) => setPrefs((p) => ({ ...p, [k]: v }));
 
   return (
@@ -183,14 +184,56 @@ function PrioritySetupStep({ name, onSave }) {
         <div style={PS.badge}>CASSIOPEIA</div>
         <h2 style={PS.title}>Welcome, {name}</h2>
         <p style={PS.sub}>
-          Set your priority weights before your first search. These control how
-          papers are ranked against your profile. You can adjust them any time
-          via the ⚙ settings button in the top bar.
+          Configure your search before diving in. You can adjust everything
+          later via the ⚙ settings button in the top bar.
         </p>
+
+        <p style={MS.sectionLabel}>Paper ranking weights</p>
+        <p style={{ ...MS.sub, margin: "0 0 16px" }}>Controls how papers are scored against your profile.</p>
         {PRIORITY_LABELS.map(({ key, label, desc }) => (
           <Slider key={key} label={label} value={prefs[key]} onChange={set(key)} description={desc} />
         ))}
-        <button style={PS.btn} onClick={() => onSave(prefs)}>Save &amp; Continue →</button>
+
+        <div style={MS.divider} />
+
+        <p style={MS.sectionLabel}>Synthesis settings</p>
+
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={scan.withCritique}
+              onChange={(e) => setScan((s) => ({ ...s, withCritique: e.target.checked }))}
+              style={{ accentColor: "#22d3ee", cursor: "pointer", width: 16, height: 16 }}
+            />
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>AI Critique</span>
+          </label>
+          <p style={{ ...MS.sub, margin: "4px 0 0 26px" }}>
+            Red-teams each proposal for novelty, confounds, and evidence strength (~5 extra Sonnet calls).
+          </p>
+        </div>
+
+        <div style={{ marginBottom: 28 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0" }}>Iterative evidence gathering</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: "#4ade80" }}>{iterationsLabel(scan.maxIterations)}</span>
+          </div>
+          <p style={{ ...MS.sub, margin: "2px 0 8px" }}>
+            The LLM identifies evidence gaps and fires targeted sub-queries before finalising proposals.
+            0 = single-shot (fastest); 3 is the recommended default.
+          </p>
+          <input
+            type="range" min="0" max="5" step="1"
+            value={scan.maxIterations}
+            onChange={(e) => setScan((s) => ({ ...s, maxIterations: Number(e.target.value) }))}
+            style={{ width: "100%", height: 4, cursor: "pointer", appearance: "auto", accentColor: "#4ade80" }}
+          />
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#475569", marginTop: 4 }}>
+            <span>0 — off</span><span>1</span><span>2</span><span>3 ★</span><span>4</span><span>5</span>
+          </div>
+        </div>
+
+        <button style={PS.btn} onClick={() => onSave(prefs, scan)}>Save &amp; Continue →</button>
       </div>
     </div>
   );
@@ -286,14 +329,11 @@ function App() {
     if (mode === "setup") setMode("dashboard");
   };
 
-  // Setup step only saves priorities; scan settings use defaults until first modal open
-  const handleSavePrioritiesOnly = (prefs) => handleSaveSettings(prefs, scanSettings);
-
   const openSettings = () => setShowSettings(true);
   const closeSettings = () => setShowSettings(false);
 
   if (mode === "setup" && researcher)
-    return <PrioritySetupStep name={researcher.name} onSave={handleSavePrioritiesOnly} />;
+    return <PrioritySetupStep name={researcher.name} onSave={handleSaveSettings} />;
 
   if (mode === "dashboard" && researcher)
     return (
@@ -451,7 +491,7 @@ const PS = {
   },
   card: {
     width: "100%",
-    maxWidth: 480,
+    maxWidth: 520,
     background: "#111827",
     border: "1px solid #1e293b",
     borderRadius: 16,
