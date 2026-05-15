@@ -43,6 +43,18 @@ class PaperScorer:
         "annals of botany",
     }
 
+    # Source-level tier fallback used when the journal field is not populated.
+    # Maps SourceType values to the same two tiers.
+    _HIGH_IMPACT_SOURCES = {
+        SourceType.NATURE_COMMS,
+        SourceType.NEW_PHYTOLOGIST,
+        SourceType.PLANT_PHYSIOLOGY,
+    }
+    _MID_IMPACT_SOURCES = {
+        SourceType.FRONTIERS,
+        SourceType.PLOS_ONE,
+    }
+
     def score_paper(
         self,
         paper: PaperMetadata,
@@ -129,7 +141,7 @@ class PaperScorer:
     def _score_recency(self, paper: PaperMetadata) -> float:
         if not paper.published_date:
             return 0.3
-        age_days = (datetime.utcnow() - paper.published_date).days
+        age_days = (datetime.now() - paper.published_date).days
         if age_days < 90:
             return 1.0
         if age_days < 180:
@@ -178,8 +190,18 @@ class PaperScorer:
         if paper.source == SourceType.BIORXIV:
             return CredibilityLevel.PRELIMINARY
         journal = (paper.journal or "").lower()
-        if journal in self.HIGH_IMPACT_JOURNALS and paper.citation_count > 10:
+        high_journal = (
+            journal in self.HIGH_IMPACT_JOURNALS
+            or paper.source in self._HIGH_IMPACT_SOURCES
+        )
+        mid_journal = (
+            journal in self.MID_IMPACT_JOURNALS
+            or paper.source in self._MID_IMPACT_SOURCES
+        )
+        if high_journal and paper.citation_count > 5:
             return CredibilityLevel.HIGH
+        if high_journal or (mid_journal and paper.citation_count > 5):
+            return CredibilityLevel.MODERATE
         if paper.citation_count > 5:
             return CredibilityLevel.MODERATE
         return CredibilityLevel.PRELIMINARY
@@ -201,10 +223,8 @@ class PaperScorer:
         text = f"{paper.title} {paper.abstract}".lower()
 
         # Find stresses mentioned in paper but NOT in researcher's focus
-        all_stresses = [
-            s for s in ["drought", "nutrient", "temperature", "pathogen",
+        all_stresses = ["drought", "nutrient", "temperature", "pathogen",
                         "heavy metal", "salinity", "light", "flooding"]
-        ]
         researcher_stresses = {
             s.value.replace("_", " ") for s in profile.stress_types
         }
