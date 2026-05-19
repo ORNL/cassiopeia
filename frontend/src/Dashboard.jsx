@@ -126,8 +126,8 @@ function SourceGroup({ title, subtitle, items, accent, selected, onToggle, onIte
   return (
     <div style={{ marginBottom: 14 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <span style={{ fontSize: 10, fontWeight: 700, color: accent, textTransform: "uppercase", letterSpacing: "0.06em" }}>{title}</span>
-        <span style={{ fontSize: 10, color: "#4b5563" }}>{subtitle}</span>
+        <span style={{ fontSize: 11, fontWeight: 700, color: accent, textTransform: "uppercase", letterSpacing: "0.06em" }}>{title}</span>
+        <span style={{ fontSize: 11, color: "#4b5563" }}>{subtitle}</span>
         <button onClick={onToggle} style={S.toggleBtn}>
           {items.every((s) => selected.includes(s.value)) ? "deselect all" : "select all"}
         </button>
@@ -304,7 +304,7 @@ function FeasibilityDetail({ f }) {
   if (!f?.note) return null;
   return (
     <div style={{ marginTop: 8, background: "#0c0f1a", borderRadius: 6, padding: "8px 12px" }}>
-      <div style={{ fontSize: 11, color: "#64748b", lineHeight: 1.5 }}>{f.note}</div>
+      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{f.note}</div>
       {f.missing_equipment?.length > 0 && (
         <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
           <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>Missing:</span>
@@ -314,7 +314,7 @@ function FeasibilityDetail({ f }) {
         </div>
       )}
       {f.adaptation && (
-        <div style={{ marginTop: 4, fontSize: 11, color: "#fbbf24", fontStyle: "italic" }}>Adaptation: {f.adaptation}</div>
+        <div style={{ marginTop: 4, fontSize: 12, color: "#fbbf24", fontStyle: "italic" }}>Adaptation: {f.adaptation}</div>
       )}
     </div>
   );
@@ -364,7 +364,7 @@ function VerificationPanel({ v }) {
           {v.details.map((d) => (
             <div key={`${d.paper_id}-${d.claim}`} style={{ ...S.verifyDetail, borderColor: verifyBorderColor(d.supported) }}>
               <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: verifyTextColor(d.supported) }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: verifyTextColor(d.supported) }}>
                   {verifyLabel(d.supported)}
                 </span>
                 <span style={{ fontSize: 10, color: "#475569" }}>{d.paper_id ? d.paper_id.slice(0, 8) : ""}</span>
@@ -372,8 +372,8 @@ function VerificationPanel({ v }) {
                   <span style={{ fontSize: 10, color: "#64748b", marginLeft: "auto" }}>{(d.confidence * 100).toFixed(0)}% conf</span>
                 )}
               </div>
-              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5, marginBottom: 3 }}>{d.claim}</div>
-              {d.reason && <div style={{ fontSize: 11, color: "#64748b", fontStyle: "italic" }}>{d.reason}</div>}
+              <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.5, marginBottom: 3 }}>{d.claim}</div>
+              {d.reason && <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>{d.reason}</div>}
             </div>
           ))}
         </div>
@@ -414,7 +414,7 @@ function SeverityChip({ concern, severity }) {
         borderRadius: 6, padding: "1px 6px", whiteSpace: "nowrap", flexShrink: 0 }}>
         {severity}
       </span>
-      <span style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.4 }}>{concern}</span>
+      <span style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.4 }}>{concern}</span>
     </div>
   );
 }
@@ -438,7 +438,7 @@ function CritiquePanel({ critique }) {
           ✦ {rec.label}
         </span>
         {critique.summary && (
-          <span style={{ fontSize: 12, color: "#64748b", flex: 1, minWidth: 0 }}>
+          <span style={{ fontSize: 13, color: "#64748b", flex: 1, minWidth: 0 }}>
             {critique.summary}
           </span>
         )}
@@ -454,14 +454,14 @@ function CritiquePanel({ critique }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <span style={S.critiqueSectionTitle}>Novelty</span>
               {novelty.label && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: novelty.color }}>{novelty.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: novelty.color }}>{novelty.label}</span>
               )}
             </div>
             {critique.novelty?.reasoning && (
               <div style={S.critiqueText}>{critique.novelty.reasoning}</div>
             )}
             {critique.novelty?.closest_prior_work && (
-              <div style={{ fontSize: 11, color: "#475569", marginTop: 2 }}>
+              <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>
                 Closest prior: <em>{critique.novelty.closest_prior_work}</em>
               </div>
             )}
@@ -472,7 +472,7 @@ function CritiquePanel({ critique }) {
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
               <span style={S.critiqueSectionTitle}>Evidence</span>
               {evidence.label && (
-                <span style={{ fontSize: 11, fontWeight: 700, color: evidence.color }}>{evidence.label}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: evidence.color }}>{evidence.label}</span>
               )}
             </div>
             {critique.evidence_strength?.reasoning && (
@@ -812,16 +812,16 @@ function ContradictionsTab({ contradictions, newContradictionKeys }) {
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
             <div style={{ background: "#0c1a08", borderRadius: 6, padding: "8px 12px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim A</div>
-              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_a}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#4ade80", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim A</div>
+              <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_a}</div>
             </div>
             <div style={{ background: "#1a0c08", borderRadius: 6, padding: "8px 12px" }}>
-              <div style={{ fontSize: 10, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim B</div>
-              <div style={{ fontSize: 12, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_b}</div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: "#f87171", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 4 }}>Claim B</div>
+              <div style={{ fontSize: 13, color: "#94a3b8", lineHeight: 1.5 }}>{c.claim_b}</div>
             </div>
           </div>
           {c.resolution_hint && (
-            <div style={{ fontSize: 12, color: "#64748b", fontStyle: "italic" }}>
+            <div style={{ fontSize: 13, color: "#64748b", fontStyle: "italic" }}>
               Possible resolution: {c.resolution_hint}
             </div>
           )}
@@ -1612,8 +1612,8 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
                   {anchorResults.map((r) => (
                     <div key={r.paper_id} style={{ ...S.comboCard, marginBottom: 8 }}>
                       <div style={{ fontSize: 13, fontWeight: 600, color: "#e2e8f0", marginBottom: 4 }}>{cleanTitle(r.title)}</div>
-                      <div style={{ fontSize: 11, color: "#64748b" }}>{r.journal} {r.doi && `· ${r.doi}`} · similarity {(r.similarity * 100).toFixed(0)}%</div>
-                      <div style={{ fontSize: 12, color: "#94a3b8", marginTop: 6 }}>{r.abstract_snippet}</div>
+                      <div style={{ fontSize: 12, color: "#64748b" }}>{r.journal} {r.doi && `· ${r.doi}`} · similarity {(r.similarity * 100).toFixed(0)}%</div>
+                      <div style={{ fontSize: 13, color: "#94a3b8", marginTop: 6 }}>{r.abstract_snippet}</div>
                     </div>
                   ))}
                 </div>
@@ -1696,7 +1696,7 @@ const S = {
   speciesCard: { padding: "10px 6px", borderRadius: 8, border: "1px solid #1e293b", background: "#0c0f1a", cursor: "pointer", textAlign: "center", transition: "all 0.15s", display: "flex", flexDirection: "column", gap: 2 },
   speciesOn: { background: "#164e3f", borderColor: "#4ade80" },
   speciesName: { fontSize: 12, fontWeight: 600, color: "#e2e8f0" },
-  speciesLatin: { fontSize: 9, color: "#4b5563", fontStyle: "italic" },
+  speciesLatin: { fontSize: 11, color: "#4b5563", fontStyle: "italic" },
 
   chipWrap: { display: "flex", flexWrap: "wrap", gap: 6 },
   chip: { padding: "7px 14px", borderRadius: 20, border: "1px solid #334155", background: "#1e293b", color: "#94a3b8", fontSize: 12, cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap" },
@@ -1714,7 +1714,7 @@ const S = {
 
   sliderLabel: { fontSize: 13, fontWeight: 600, color: "#e2e8f0" },
   sliderVal: { fontSize: 13, fontWeight: 700, color: "#4ade80" },
-  sliderDesc: { fontSize: 11, color: "#64748b", margin: "2px 0 8px" },
+  sliderDesc: { fontSize: 12, color: "#64748b", margin: "2px 0 8px" },
   range: { width: "100%", height: 4, cursor: "pointer", appearance: "auto" },
 
   qPrev: { background: "#111827", border: "1px solid #1e293b", borderRadius: 12, padding: 16, marginBottom: 20 },
@@ -1723,7 +1723,7 @@ const S = {
   qBadge: { marginLeft: "auto", fontSize: 11, color: "#64748b", background: "#1e293b", padding: "2px 8px", borderRadius: 10 },
   qItem: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px", border: "1px solid #1e293b" },
   qType: { fontSize: 9, fontWeight: 700, padding: "2px 6px", borderRadius: 4, textTransform: "uppercase", letterSpacing: "0.04em" },
-  qCode: { fontSize: 11, color: "#22d3ee", fontFamily: "'IBM Plex Mono', monospace", wordBreak: "break-all" },
+  qCode: { fontSize: 12, color: "#22d3ee", fontFamily: "'IBM Plex Mono', monospace", wordBreak: "break-all" },
 
   errBox: { background: "#1f0f0f", border: "1px solid #7f1d1d", borderRadius: 8, padding: "12px 16px", color: "#fca5a5", fontSize: 13, marginBottom: 16 },
 
@@ -1755,13 +1755,13 @@ const S = {
   pExp: { marginTop: 16, paddingTop: 16, borderTop: "1px solid #1e293b" },
   sGrid: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 24px", marginBottom: 16 },
   sRow: { display: "flex", alignItems: "center", gap: 8 },
-  sLbl: { fontSize: 11, color: "#94a3b8", minWidth: 64 },
+  sLbl: { fontSize: 12, color: "#94a3b8", minWidth: 64 },
   sBarBg: { flex: 1, height: 6, borderRadius: 3, background: "#1e293b", overflow: "hidden" },
   sBar: { height: "100%", borderRadius: 3, transition: "width 0.4s ease" },
-  sVal: { fontSize: 11, color: "#e2e8f0", minWidth: 32, textAlign: "right" },
+  sVal: { fontSize: 12, color: "#e2e8f0", minWidth: 32, textAlign: "right" },
   cBox: { background: "#0c0f1a", borderRadius: 8, padding: 12, marginBottom: 12 },
   cTitle: { fontSize: 12, fontWeight: 600, color: "#fbbf24", marginBottom: 8 },
-  cLine: { fontSize: 12, color: "#94a3b8", padding: "4px 0", lineHeight: 1.5 },
+  cLine: { fontSize: 13, color: "#94a3b8", padding: "4px 0", lineHeight: 1.5 },
   tags: { display: "flex", gap: 8, flexWrap: "wrap" },
   tag: { fontSize: 11, padding: "3px 10px", borderRadius: 12, background: "#1e293b", color: "#94a3b8", border: "1px solid #334155" },
   tagOA: { background: "#164e3f", borderColor: "#4ade80", color: "#4ade80" },
@@ -1772,14 +1772,14 @@ const S = {
   ragBadge: { fontSize: 10, fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase", padding: "3px 10px", borderRadius: 12, background: "#0c1f2d", border: "1px solid #0e4a6e", color: "#22d3ee" },
   ragComboCard: { background: "#0c1422", border: "1px solid #0e2a4a", borderRadius: 10, padding: 18, marginBottom: 12 },
   supportBlock: { background: "#0a1020", borderRadius: 8, padding: "8px 12px", marginBottom: 8, marginTop: 4 },
-  supportTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 },
-  supportLink: { fontSize: 11, fontWeight: 600, color: "#22d3ee", background: "#0c1f2d", border: "1px solid #0e3a5e", borderRadius: 6, padding: "2px 8px", textDecoration: "none", whiteSpace: "nowrap", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" },
+  supportTitle: { fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 },
+  supportLink: { fontSize: 12, fontWeight: 600, color: "#22d3ee", background: "#0c1f2d", border: "1px solid #0e3a5e", borderRadius: 6, padding: "2px 8px", textDecoration: "none", whiteSpace: "nowrap", maxWidth: 300, overflow: "hidden", textOverflow: "ellipsis", display: "inline-block" },
   supportChip: { fontSize: 11, fontWeight: 600, color: "#475569", background: "#0c0f1a", border: "1px solid #1e293b", borderRadius: 6, padding: "2px 8px", whiteSpace: "nowrap" },
   insightBlock: { background: "#0c0f1a", borderRadius: 8, padding: "10px 14px", marginTop: 4 },
-  insightTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 },
+  insightTitle: { fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 8 },
   insightRow: { display: "flex", gap: 10, marginBottom: 6, alignItems: "flex-start" },
-  insightPaper: { fontSize: 11, fontWeight: 600, color: "#22d3ee", whiteSpace: "nowrap", flexShrink: 0, paddingTop: 1 },
-  insightText: { fontSize: 12, color: "#64748b", lineHeight: 1.5 },
+  insightPaper: { fontSize: 12, fontWeight: 600, color: "#22d3ee", whiteSpace: "nowrap", flexShrink: 0, paddingTop: 1 },
+  insightText: { fontSize: 13, color: "#64748b", lineHeight: 1.5 },
 
   empty: { textAlign: "center", padding: "60px 24px" },
   footer: { textAlign: "center", padding: "16px 24px", fontSize: 11, color: "#334155", borderTop: "1px solid #1e293b" },
@@ -1803,8 +1803,8 @@ const S = {
 
   critiqueToggle: { display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#94a3b8", cursor: "pointer", marginBottom: 10 },
   critiqueSection: { background: "#0c0f1a", borderRadius: 6, padding: "8px 12px" },
-  critiqueSectionTitle: { fontSize: 10, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em" },
-  critiqueText: { fontSize: 12, color: "#64748b", lineHeight: 1.5, marginTop: 2 },
+  critiqueSectionTitle: { fontSize: 11, fontWeight: 700, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em" },
+  critiqueText: { fontSize: 13, color: "#64748b", lineHeight: 1.5, marginTop: 2 },
   verifyFlag: { fontSize: 10, fontWeight: 700, color: "#fbbf24", background: "#1a1204", border: "1px solid #7c5a0a", borderRadius: 10, padding: "2px 10px", whiteSpace: "nowrap" },
   verifyBtn: { fontSize: 10, fontWeight: 600, color: "#64748b", background: "none", border: "1px solid #334155", borderRadius: 10, padding: "2px 10px", cursor: "pointer" },
   verifyDetails: { marginTop: 8, display: "flex", flexDirection: "column", gap: 6 },
