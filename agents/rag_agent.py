@@ -66,6 +66,12 @@ Researcher profile:
   Methods  : {methods}
   Keywords : {keywords}
 
+PRIORITY: focus your proposals on the species and stress types listed above. \
+Proposals that directly involve those organisms and conditions will be most \
+useful to this researcher. Use the keywords as additional lens — proposals \
+that combine the researcher's focus species/stresses with insights related \
+to those keywords are especially valuable.
+
 {preference_block}\
 Below are abstracts from papers retrieved for this researcher. Each paper \
 header shows its exact paper_id — use these IDs when citing papers.
@@ -429,42 +435,72 @@ class RAGAgent(Agent):
         }
 
         if max_iterations == 0:
-            prompt = _COMBINATIONS_PROMPT.format(
-                species=", ".join(species) or "unspecified",
-                stresses=", ".join(stresses) or "unspecified",
-                methods=", ".join(methods) or "unspecified",
-                keywords=", ".join(keywords or []) or "none",
-                context=self._build_context_blocks(hits),
-                preference_block=self._build_preference_block(liked_proposals),
-                n_proposals=n_proposals,
+            proposals = await self._single_shot_proposals(
+                hits, species, stresses, methods, keywords, liked_proposals, n_proposals,
             )
-            try:
-                proposals = await self._llm_proposals(prompt)
-            except Exception as exc:
-                logger.warning("synthesize_combinations (single-shot) failed: %s", exc)
-                return []
         else:
-            initial_papers = [{"paper_id": h["paper_id"], "document": h["document"]} for h in hits]
-            try:
-                final_state = await self._run_synthesis_graph(
-                    profile=profile,
-                    initial_papers=initial_papers,
-                    liked_proposals=liked_proposals or [],
-                    researcher_id=researcher_id,
-                    max_iterations=max_iterations,
-                    n_proposals=n_proposals,
-                )
-                proposals = final_state["draft_proposals"]
-                for p in final_state["additional_papers"]:
-                    paper_text_by_id.setdefault(p["paper_id"], p["document"])
-            except Exception as exc:
-                logger.warning("synthesize_combinations (iterative) failed: %s", exc)
-                return []
+            proposals, extra = await self._iterative_proposals(
+                hits, profile, liked_proposals, researcher_id, max_iterations, n_proposals,
+            )
+            for p in extra:
+                paper_text_by_id.setdefault(p["paper_id"], p["document"])
 
+        if proposals is None:
+            return []
         enriched = await self._enrich_proposals(proposals, researcher_id)
         return await self._annotate_proposals(
             enriched, paper_text_by_id, with_critique, instruments or []
         )
+
+    async def _single_shot_proposals(
+        self,
+        hits: list[dict],
+        species: list[str],
+        stresses: list[str],
+        methods: list[str],
+        keywords: list[str] | None,
+        liked_proposals: list[dict] | None,
+        n_proposals: int,
+    ) -> list[dict] | None:
+        prompt = _COMBINATIONS_PROMPT.format(
+            species=", ".join(species) or "unspecified",
+            stresses=", ".join(stresses) or "unspecified",
+            methods=", ".join(methods) or "unspecified",
+            keywords=", ".join(keywords or []) or "none",
+            context=self._build_context_blocks(hits),
+            preference_block=self._build_preference_block(liked_proposals),
+            n_proposals=n_proposals,
+        )
+        try:
+            return await self._llm_proposals(prompt)
+        except Exception as exc:
+            logger.warning("synthesize_combinations (single-shot) failed: %s", exc)
+            return None
+
+    async def _iterative_proposals(
+        self,
+        hits: list[dict],
+        profile: dict,
+        liked_proposals: list[dict] | None,
+        researcher_id: str,
+        max_iterations: int,
+        n_proposals: int,
+    ) -> tuple[list[dict] | None, list[dict]]:
+        """Returns (proposals | None, additional_papers)."""
+        initial_papers = [{"paper_id": h["paper_id"], "document": h["document"]} for h in hits]
+        try:
+            final_state = await self._run_synthesis_graph(
+                profile=profile,
+                initial_papers=initial_papers,
+                liked_proposals=liked_proposals or [],
+                researcher_id=researcher_id,
+                max_iterations=max_iterations,
+                n_proposals=n_proposals,
+            )
+            return final_state["draft_proposals"], final_state["additional_papers"]
+        except Exception as exc:
+            logger.warning("synthesize_combinations (iterative) failed: %s", exc)
+            return None, []
 
     async def _annotate_proposals(
         self,

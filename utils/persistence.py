@@ -253,6 +253,13 @@ class PaperStore:
         ).fetchall()
         return [_row_to_scored(json.loads(row["data"])) for row in rows]
 
+    def get_added_at_map(self, researcher_id: str) -> dict[str, str]:
+        """Return {paper_id: added_at} for all papers belonging to a researcher."""
+        rows = self._conn.execute(
+            "SELECT paper_id, added_at FROM papers WHERE researcher_id = ?", (researcher_id,)
+        ).fetchall()
+        return {row["paper_id"]: row["added_at"] for row in rows}
+
     def known_dois(self, researcher_id: str) -> set[str]:
         rows = self._conn.execute(
             "SELECT doi FROM papers WHERE researcher_id = ? AND doi IS NOT NULL",

@@ -149,19 +149,23 @@ async def lifespan(app: FastAPI):
         await manager.shutdown(_mining_handle, blocking=True)
         await manager.shutdown(_rag_handle, blocking=True)
 
-        # Ask litellm's background LoggingWorker to drain and stop cleanly before
-        # the event loop shuts down, preventing "Task destroyed but pending" errors.
+        # Ask litellm's background LoggingWorker to drain and stop cleanly.
         try:
             from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
             await GLOBAL_LOGGING_WORKER.stop()
         except Exception:
             pass
-        # Cancel any other lingering tasks so the loop closes cleanly.
+        # Brief yield so any coroutines scheduled by stop() can reach their next await.
+        await asyncio.sleep(0)
+        # Cancel remaining tasks and suppress the asyncio "Task destroyed but it is
+        # pending!" GC warning — litellm's queue.get() leaves an internal Future that
+        # triggers it even after a clean CancelledError.
         pending = {t for t in asyncio.all_tasks() if t is not asyncio.current_task()}
         if pending:
             logger.debug("Cancelling %d lingering task(s) at shutdown", len(pending))
             for t in pending:
                 t.cancel()
+                t._log_destroy_pending = False  # noqa: SLF001
             await asyncio.gather(*pending, return_exceptions=True)
 
     _paper_store.close()
@@ -431,6 +435,7 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
     if not scored:
         return [], []
     scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
+    added_at_map = _paper_store.get_added_at_map(researcher_id)
     papers: list[dict[str, Any]] = []
     for i, sp in enumerate(scored):
         haystack = " ".join(filter(None, [
@@ -458,6 +463,7 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
                 "credibility": round(sp.relevance.credibility, 3),
                 "novelty": round(sp.relevance.novelty, 3),
             },
+            "added_at": added_at_map.get(sp.paper.paper_id),
             "credibility_level": sp.credibility.value,
             "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
             "suggested_combinations": sp.suggested_combinations,

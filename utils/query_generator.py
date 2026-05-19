@@ -205,6 +205,7 @@ class QueryGenerator:
         modifiers = self._build_modifiers(profile)
         sp_syns: dict = synonyms.get("species", {})
         st_syns: dict = synonyms.get("stresses", {})
+        kws = [k for k in (profile.expertise_keywords or []) if k][:3]
         queries: list[SearchQuery] = []
 
         for source in allowed:
@@ -215,21 +216,8 @@ class QueryGenerator:
             ):
                 if count >= max_per_source:
                     break
-
-                sp_group = [species] + [s for s in sp_syns.get(species, []) if s][:2]
-
-                st_str = stress.value.replace("_", " ")
-                extra = [s for s in st_syns.get(stress.value, []) if s][:4]
-
-                if source == SourceType.ARXIV:
-                    # arXiv: prepend bioinformatics terms to maximise recall on that server
-                    st_group = [st_str] + [t for t in _ARXIV_BIO_TERMS if t not in extra][:4]
-                else:
-                    st_group = [st_str] + extra
-
-                term_groups = [sp_group[:3], st_group[:5]]
+                term_groups = self._term_groups(source, species, stress, sp_syns, st_syns, kws)
                 flat = [grp[0] for grp in term_groups]
-
                 queries.append(SearchQuery(
                     query_string=_AND.join(
                         f'"{t}"' if " " in t else t for t in flat
@@ -243,6 +231,28 @@ class QueryGenerator:
                 count += 1
 
         return queries
+
+    def _term_groups(
+        self,
+        source: SourceType,
+        species: str,
+        stress,
+        sp_syns: dict,
+        st_syns: dict,
+        kws: list[str],
+    ) -> list[list[str]]:
+        """Build the two OR-groups for one (source, species, stress) triple."""
+        sp_group = [species] + [s for s in sp_syns.get(species, []) if s][:2]
+        st_str = stress.value.replace("_", " ")
+        extra = [s for s in st_syns.get(stress.value, []) if s][:4]
+        if source == SourceType.ARXIV:
+            # arXiv: use profile keywords when available, otherwise bioinformatics terms
+            bio = [t for t in _ARXIV_BIO_TERMS if t not in extra]
+            st_group = [st_str] + (kws or bio)[:4]
+        else:
+            # Stress synonyms first, then profile keywords to widen the OR group
+            st_group = [st_str] + extra + [k for k in kws if k not in extra]
+        return [sp_group[:3], st_group[:5]]
 
     def _allowed_sources(self, profile: ResearcherProfile) -> set[SourceType]:
         allowed = {SourceType(s) for s in (profile.source_targets or [])}

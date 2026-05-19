@@ -1,7 +1,7 @@
 // Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 // SPDX-License-Identifier: Apache-2.0
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
 
 // Decode HTML entities (e.g. &lt;i&gt; → <i>) then strip all tags to plain text.
@@ -507,10 +507,11 @@ function CritiquePanel({ critique }) {
 
 CritiquePanel.propTypes = { critique: PropTypes.object };
 
-function RagComboCard({ c, rating, onRate, paperById }) {
+function RagComboCard({ c, rating, onRate, paperById, isNew }) {
   return (
     <div style={S.ragComboCard}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+        {isNew && <span style={S.newBadge}>NEW</span>}
         {c.theme && <span style={S.themeChip}>{c.theme}</span>}
         {c.novelty_warning && <span style={S.noveltyWarn}>⚠ {c.novelty_warning}</span>}
         {c.feasibility && <FeasibilityBadge f={c.feasibility} />}
@@ -569,7 +570,7 @@ function RagComboCard({ c, rating, onRate, paperById }) {
 FeasibilityBadge.propTypes = { f: PropTypes.object };
 FeasibilityDetail.propTypes = { f: PropTypes.object };
 
-RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object };
+RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object, isNew: PropTypes.bool };
 
 const COMBO_PAGE_SIZES = [5, 10, 20, 50, 100];
 
@@ -652,7 +653,7 @@ function ComboPagination({ page, setPage, pageCount, pageSize, setPageSize, page
 
 ComboPagination.propTypes = { page: PropTypes.number, setPage: PropTypes.func, pageCount: PropTypes.number, pageSize: PropTypes.number, setPageSize: PropTypes.func, pageSizes: PropTypes.array };
 
-function ProposalsTab({ ragCombos, ratings, onRate, papers, synthesisPaperMeta }) {
+function ProposalsTab({ ragCombos, newProposalIds, ratings, onRate, papers, synthesisPaperMeta }) {
   const [speciesF, setSpeciesF]   = useState([]);
   const [stressF,  setStressF]    = useState([]);
   const [pageSize, setPageSize]   = useState(10);
@@ -695,14 +696,14 @@ function ProposalsTab({ ragCombos, ratings, onRate, papers, synthesisPaperMeta }
       <p style={S.cardSub}>Novel experiment designs reasoned over multiple papers together</p>
       <ComboFilterBar items={ragCombos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={ragCombos.length} filtered={filtered.length} category="proposals" />
       {paged.map((c) => (
-        <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} />
+        <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} isNew={(newProposalIds || new Set()).has(c.proposal_id || c.suggestion)} />
       ))}
       <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} />
     </div>
   );
 }
 
-ProposalsTab.propTypes = { ragCombos: PropTypes.array, ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
+ProposalsTab.propTypes = { ragCombos: PropTypes.array, newProposalIds: PropTypes.instanceOf(Set), ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
 
 function HypothesesTab({ combos }) {
   const [speciesF, setSpeciesF]   = useState([]);
@@ -760,7 +761,7 @@ function HypothesesTab({ combos }) {
 
 HypothesesTab.propTypes = { combos: PropTypes.array };
 
-function ContradictionsTab({ contradictions }) {
+function ContradictionsTab({ contradictions, newContradictionKeys }) {
   const [speciesF, setSpeciesF] = useState([]);
   const [stressF,  setStressF]  = useState([]);
   const [pageSize, setPageSize] = useState(10);
@@ -794,9 +795,13 @@ function ContradictionsTab({ contradictions }) {
       </div>
       <p style={S.cardSub}>Papers in your knowledge base that present conflicting or irreconcilable findings</p>
       <ComboFilterBar items={contradictions} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={contradictions.length} filtered={filtered.length} category="contradictions" />
-      {paged.map((c) => (
-        <div key={[...c.papers].sort((a, b) => a.localeCompare(b)).join("|")} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
+      {paged.map((c) => {
+        const cKey = contKey(c);
+        const isNew = (newContradictionKeys || new Set()).has(cKey);
+        return (
+        <div key={cKey} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10, alignItems: "center" }}>
+          {isNew && <span style={S.newBadge}>NEW</span>}
             {(c.paper_meta || c.papers.map((t) => ({ title: t, doi: null, url: null }))).map((pm) => {
               const href = pm.doi ? `https://doi.org/${pm.doi}` : pm.url;
               const chipStyle = { fontSize: 11, fontWeight: 600, color: "#fb923c", background: "#1f0c04", border: "1px solid #7c3a1a", borderRadius: 6, padding: "2px 8px", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" };
@@ -821,13 +826,14 @@ function ContradictionsTab({ contradictions }) {
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
       <ComboPagination page={safe} setPage={setPage} pageCount={pageCount} pageSize={pageSize} setPageSize={setPageSize} />
     </div>
   );
 }
 
-ContradictionsTab.propTypes = { contradictions: PropTypes.array };
+ContradictionsTab.propTypes = { contradictions: PropTypes.array, newContradictionKeys: PropTypes.instanceOf(Set) };
 
 function ResultsTab({ papers, newPaperIds, newSince }) {
   const [credF, setCredF]             = useState("all");
@@ -1029,9 +1035,13 @@ function searchButtonLabel(scanning, isReady, count) {
 
 const CRED_ORDER = { high: 4, moderate: 3, preliminary: 2, conflicting: 1 };
 
+/** Stable key for a contradiction — sorted paper titles joined so order doesn't matter. */
+const contKey = (c) => [...c.papers].sort((a, b) => a.localeCompare(b)).join("|");
+
 const SORT_OPTIONS = [
   { key: "overall",           label: "Profile Score", title: "Weighted combination of relevance, novelty, method fit and credibility — weights set in Priority Settings" },
-  { key: "recency",           label: "Recency",       title: "How recently the paper was published" },
+  { key: "recency",           label: "Published",     title: "How recently the paper was published (publication date)" },
+  { key: "added_at",          label: "Fetched",       title: "How recently the paper was added to your library" },
   { key: "novelty",           label: "Novelty",       title: "How novel the paper's approach is relative to your knowledge base" },
   { key: "method_match",      label: "Method Fit",    title: "How well the paper's methods match your available instruments" },
   { key: "credibility_level", label: "Credibility",   title: "Journal credibility and study design quality" },
@@ -1048,6 +1058,10 @@ function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newP
   return [...result].sort((a, b) => {
     if (sortKey === "credibility_level")
       return (CRED_ORDER[b.credibility_level] ?? 0) - (CRED_ORDER[a.credibility_level] ?? 0);
+    if (sortKey === "recency")
+      return (b.published || "").localeCompare(a.published || "");
+    if (sortKey === "added_at")
+      return (b.added_at || "").localeCompare(a.added_at || "");
     return (b.scores[sortKey] ?? 0) - (a.scores[sortKey] ?? 0);
   });
 }
@@ -1331,7 +1345,12 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const [sessions, setSessions] = useState([]);
   const [newPaperIds, setNewPaperIds] = useState(new Set());
   const [newSince, setNewSince] = useState(null);
+  const [newProposalIds, setNewProposalIds] = useState(new Set());
+  const [newContradictionKeys, setNewContradictionKeys] = useState(new Set());
   const [agentStatus, setAgentStatus] = useState(null);
+  // Pre-search snapshots used to compute NEW markers after each run.
+  const prevPaperIdsRef    = useRef(new Set());
+  const prevProposalIdsRef = useRef(new Set());
 
   const RESEARCHER_ID = researcherId || "researcher_001";
 
@@ -1372,10 +1391,22 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
     submitRating(RESEARCHER_ID, proposal, rating);
   }, []);
 
+  const applyContradictions = useCallback((incoming) => {
+    setContradictions((prev) => {
+      const prevKeys = new Set(prev.map(contKey));
+      const newKeys  = new Set(incoming.map(contKey).filter((k) => !prevKeys.has(k)));
+      if (newKeys.size > 0) setNewContradictionKeys(newKeys);
+      return incoming;
+    });
+  }, []);
+
   const doSearch = useCallback(async () => {
     setSearching(true);
     setSearchError(null);
     setShowProgress(true);
+    // Snapshot current IDs so we can mark new arrivals after the search.
+    prevPaperIdsRef.current    = new Set(papers.map((p) => p.paper_id));
+    prevProposalIdsRef.current = new Set(ragCombos.map((c) => c.proposal_id || c.suggestion));
     try {
       const data = await fetchSearchResult({
         researcher_id: RESEARCHER_ID,
@@ -1396,17 +1427,35 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setPapers(data.papers);
       setSynthesisPaperMeta(data.synthesis_paper_meta || {});
       setCombos(data.combos || []);
-      setRagCombos(data.rag_combos || []);
+      // Accumulate proposals: new ones first, then old ones not in the new set.
+      const incomingProposals = data.rag_combos || [];
+      const incomingPropIds = new Set(incomingProposals.map((c) => c.proposal_id || c.suggestion));
+      setRagCombos((prev) => [
+        ...incomingProposals,
+        ...prev.filter((c) => !incomingPropIds.has(c.proposal_id || c.suggestion)),
+      ]);
+      // Compute NEW markers based on pre-search snapshots.
+      const searchedAt = new Date().toISOString();
+      setNewPaperIds(new Set(
+        (data.papers || []).filter((p) => !prevPaperIdsRef.current.has(p.paper_id)).map((p) => p.paper_id)
+      ));
+      setNewSince(searchedAt);
+      setNewProposalIds(new Set(
+        incomingProposals
+          .filter((c) => !prevProposalIdsRef.current.has(c.proposal_id || c.suggestion))
+          .map((c) => c.proposal_id || c.suggestion)
+      ));
       setTab("results");
       refreshSessions();
-      pollForContradictions(RESEARCHER_ID, setContradictions);
+      // When contradictions arrive, mark those not seen before as new.
+      pollForContradictions(RESEARCHER_ID, applyContradictions);
     } catch (err) {
       setSearchError(err.message);
       setShowProgress(false);
     } finally {
       setSearching(false);
     }
-  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions]);
+  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions, papers, ragCombos, applyContradictions]);
 
   const isAgentReady = agentStatus?.status === "running";
 
@@ -1419,6 +1468,16 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const newInResults = papers.filter((p) => newPaperIds.has(p.paper_id)).length;
   const newSuffix = newInResults > 0 ? ` · ${newInResults} new` : "";
   const resultsLabel = papers.length ? `Results (${papers.length}${newSuffix})` : "Results";
+
+  const newInProposals = ragCombos.filter((c) => newProposalIds.has(c.proposal_id || c.suggestion)).length;
+  const proposalsSuffix = newInProposals > 0 ? ` · ${newInProposals} new` : "";
+  const proposalsLabel = ragCombos.length ? `AI Proposals (${ragCombos.length}${proposalsSuffix})` : "AI Proposals";
+
+  const newInContradictions = contradictions.filter((c) => newContradictionKeys.has(contKey(c))).length;
+  const contradictionsSuffix = newInContradictions > 0 ? ` · ${newInContradictions} new` : "";
+  const contradictionsLabel = contradictions.length
+    ? `Contradictions (${contradictions.length}${contradictionsSuffix})`
+    : "Contradictions";
 
   return (
     <div style={S.root}>
@@ -1456,9 +1515,9 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
         {[
           { id: "profile",     label: "Research Profile", icon: "🧬" },
           { id: "results",     label: resultsLabel, icon: "📊" },
-          { id: "proposals",   label: ragCombos.length ? `AI Proposals (${ragCombos.length})` : "AI Proposals", icon: "💡" },
-          { id: "hypotheses",  label: combos.length ? `Hypotheses (${combos.length})` : "Hypotheses", icon: "📝" },
-          { id: "contradictions", label: "Contradictions" + (contradictions.length ? ` (${contradictions.length})` : ""), icon: "⚠️" },
+          { id: "proposals",      label: proposalsLabel,      icon: "💡" },
+          { id: "hypotheses",     label: combos.length ? `Hypotheses (${combos.length})` : "Hypotheses", icon: "📝" },
+          { id: "contradictions", label: contradictionsLabel,  icon: "⚠️" },
         ].map((t) => (
           <button key={t.id} onClick={() => setTab(t.id)}
             style={{ ...S.tabBtn, ...(tab === t.id ? S.tabOn : {}) }}
@@ -1575,6 +1634,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
         {tab === "proposals" && (
           <ProposalsTab
             ragCombos={ragCombos}
+            newProposalIds={newProposalIds}
             ratings={ratings}
             onRate={doRate}
             papers={papers}
@@ -1589,7 +1649,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
         {/* ═══ CONTRADICTIONS ═══ */}
         {tab === "contradictions" && (
-          <ContradictionsTab contradictions={contradictions} />
+          <ContradictionsTab contradictions={contradictions} newContradictionKeys={newContradictionKeys} />
         )}
       </main>
 
