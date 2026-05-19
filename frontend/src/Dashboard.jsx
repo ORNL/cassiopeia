@@ -797,7 +797,13 @@ function ContradictionsTab({ contradictions }) {
       {paged.map((c) => (
         <div key={[...c.papers].sort((a, b) => a.localeCompare(b)).join("|")} style={{ ...S.ragComboCard, borderColor: "#3a1a0a", background: "#120a04", marginBottom: 14 }}>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 10 }}>
-            {c.papers.map((p) => <span key={p} style={{ fontSize: 11, fontWeight: 600, color: "#fb923c", background: "#1f0c04", border: "1px solid #7c3a1a", borderRadius: 6, padding: "2px 8px" }}>{p}</span>)}
+            {(c.paper_meta || c.papers.map((t) => ({ title: t, doi: null, url: null }))).map((pm) => {
+              const href = pm.doi ? `https://doi.org/${pm.doi}` : pm.url;
+              const chipStyle = { fontSize: 11, fontWeight: 600, color: "#fb923c", background: "#1f0c04", border: "1px solid #7c3a1a", borderRadius: 6, padding: "2px 8px", maxWidth: 320, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block" };
+              return href
+                ? <a key={pm.title} href={href} target="_blank" rel="noopener noreferrer" title={pm.title} style={{ ...chipStyle, textDecoration: "none", cursor: "pointer" }}>{pm.title}</a>
+                : <span key={pm.title} title={pm.title} style={chipStyle}>{pm.title}</span>;
+            })}
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
             <div style={{ background: "#0c1a08", borderRadius: 6, padding: "8px 12px" }}>

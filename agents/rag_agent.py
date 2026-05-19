@@ -116,6 +116,7 @@ _CONTRADICTION_PROMPT = """\
 You are a critical plant biology reviewer.
 
 Below are abstracts from {n} papers retrieved for the same researcher profile.
+Each paper is labelled with its exact paper_id on the header line.
 Identify pairs or groups of papers that appear to present CONTRADICTORY or \
 CONFLICTING findings — e.g. opposite effects of a treatment, disagreements \
 about a mechanism, or incompatible quantitative claims.
@@ -124,14 +125,15 @@ Return a JSON object:
 {{
   "contradictions": [
     {{
-      "papers": ["<Paper A title>", "<Paper B title>"],
-      "claim_a": "<what Paper A asserts, 1 sentence>",
-      "claim_b": "<what Paper B asserts that contradicts Paper A, 1 sentence>",
+      "papers": ["<exact paper_id from header>", "<exact paper_id from header>"],
+      "claim_a": "<what the first paper asserts, 1 sentence>",
+      "claim_b": "<what the second paper asserts that contradicts it, 1 sentence>",
       "resolution_hint": "<possible explanation for the discrepancy, e.g. species/condition difference, 1 sentence>"
     }}
   ]
 }}
 
+Use ONLY the paper_id values shown in the headers — do not invent or paraphrase them.
 If no contradictions are found return {{"contradictions": []}}.
 
 Paper abstracts:
@@ -917,10 +919,23 @@ class RAGAgent(Agent):
         hits = self._rag.query(query, n_results=n_papers, where=where)
         if len(hits) < 2:
             return []
-        context = "\n\n".join(
-            f"[Paper {i}] {(self._store.get_paper_metadata(h['paper_id']) or {}).get('title', 'Unknown')}\n{h['document'][:500]}"
-            for i, h in enumerate(hits, 1)
-        )
+
+        # Label each block with the paper_id so the LLM can reference it exactly.
+        id_to_meta: dict[str, dict] = {}
+        context_parts: list[str] = []
+        for h in hits:
+            pid = h["paper_id"]
+            meta = self._store.get_paper_metadata(pid) or {}
+            id_to_meta[pid] = {
+                "title": meta.get("title") or pid,
+                "doi":   meta.get("doi"),
+                "url":   meta.get("url"),
+            }
+            context_parts.append(
+                f"[paper_id: {pid}] {id_to_meta[pid]['title']}\n{h['document'][:500]}"
+            )
+        context = "\n\n".join(context_parts)
+
         try:
             response = await litellm.acompletion(
                 model=self._chat_model,
@@ -933,10 +948,21 @@ class RAGAgent(Agent):
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1].lstrip("json").strip()
-            return json.loads(raw).get("contradictions", [])
+            contradictions = json.loads(raw).get("contradictions", [])
         except Exception as exc:
             logger.warning("detect_contradictions pass '%s' failed: %s", query, exc)
             return []
+
+        # Replace the raw paper_id list with full metadata for the frontend.
+        for c in contradictions:
+            c["paper_meta"] = [
+                id_to_meta[pid]
+                for pid in c.get("papers", [])
+                if pid in id_to_meta
+            ]
+            # Keep papers as human-readable titles (for filters / legacy display).
+            c["papers"] = [m["title"] for m in c["paper_meta"]]
+        return contradictions
 
     @action
     async def detect_contradictions(
