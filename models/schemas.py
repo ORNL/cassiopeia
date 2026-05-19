@@ -104,6 +104,10 @@ class SearchQuery:
     source_target: SourceType
     researcher_id: str
     base_terms: list[str] = field(default_factory=list)
+    # OR-within-group, AND-between-groups structure produced by the LLM pass.
+    # Each inner list is a synonym set; fetchers join with OR then AND the groups.
+    # Falls back to base_terms when empty (cross-product / rescue pass queries).
+    term_groups: list[list[str]] = field(default_factory=list)
     contextual_modifiers: dict[str, str] = field(default_factory=dict)
     generated_at: datetime = field(default_factory=datetime.utcnow)
 

@@ -24,49 +24,46 @@ logger = logging.getLogger(__name__)
 _AND = " AND "
 
 # ──────────────────────────────────────────────────────────────────────────────
-# LLM prompt
+# LLM prompt — synonym expansion only.
+#
+# The LLM's job is to list synonyms; building the actual query structure is done
+# in _build_from_synonyms so it can never hallucinate year ranges, extra terms,
+# or malformed query syntax into the search strings.
 # ──────────────────────────────────────────────────────────────────────────────
 
-_LLM_QUERY_PROMPT = """\
-You are a plant biology literature search expert.
+_LLM_SYNONYM_PROMPT = """\
+You are a plant biology expert. List synonyms and closely related search terms for
+these species and stresses. Terms must appear in scientific paper titles or abstracts.
 
-Generate diverse, semantically rich search queries for the following researcher profile.
-Each query is a SHORT LIST OF TERMS (2–4 words/phrases) that will be AND-joined and sent
-to a bibliographic database. Use precise scientific terminology, synonyms, and related
-concepts — do NOT just repeat species+stress verbatim.
+Species: {species}
+Stress types: {stresses}
 
-Researcher profile:
-  Plant species : {species}
-  Stress types  : {stresses}
-  Keywords      : {keywords}
-  Time range    : last {months} months
-
-Target sources (use exact values): {sources}
-
-{past_block}\
-Rules:
-- Generate at most {n_per_source} queries per source.
-- Each query must be meaningfully different from the others (no duplicates, no near-duplicates).
-- Include biologically relevant synonyms (e.g. "water deficit" for drought, "osmotic stress",
-  "ABA signaling", "stomatal closure", "reactive oxygen species", etc.).
-- Prefer specific mechanistic or phenotypic terms that appear in paper titles/abstracts.
-- Keep each terms list to 2–4 entries; the fetcher AND-joins them.
-
-Return ONLY valid JSON, no markdown:
+Return ONLY valid JSON (no markdown):
 {{
-  "queries": [
-    {{"source": "<source_value>", "terms": ["<term1>", "<term2>", ...]}},
+  "species": {{
+    "<name>": ["<scientific_name>", "<genus>"],
     ...
-  ]
+  }},
+  "stresses": {{
+    "<stress_value>": ["<term1>", "<term2>", "<term3>", "<term4>"],
+    ...
+  }}
 }}
+
+Rules:
+- Species: 2-3 synonyms (scientific name, genus, common variants).
+- Stresses: 4-6 synonyms — mechanisms, phenotypes, specific ions.
+  heavy_metal  → cadmium, zinc, nickel, lead, copper, metal stress, phytoremediation
+  drought      → water deficit, water stress, osmotic stress, ABA, stomatal conductance
+  salinity     → salt stress, NaCl, osmotic stress, ion toxicity
+  temperature  → heat stress, cold stress, thermotolerance, chilling injury
+  nutrient     → nitrogen, phosphorus, nutrient deficiency, fertilization
+- Do NOT include years, date ranges, or non-biological terms.
 """
 
-_PAST_QUERIES_BLOCK = """\
-Previously used queries (do NOT repeat these verbatim — use synonyms, related mechanisms,
-or different phenotypic angles to cover new ground):
-{lines}
-
-"""
+# Bioinformatics framing injected into the stress group for arXiv queries.
+# arXiv covers computational/quantitative biology; plant physiology terms return 0.
+_ARXIV_BIO_TERMS = ["transcriptome", "RNA-seq", "gene expression", "GWAS", "genomics"]
 
 
 class QueryGenerator:
@@ -75,8 +72,9 @@ class QueryGenerator:
     ``generate_queries`` — synchronous cross-product fallback, used by the
     preview endpoint and registration confirmation.
 
-    ``generate_queries_async`` — LLM-driven, called by trigger_search and the
-    background monitor.  Falls back to ``generate_queries`` on any error.
+    ``generate_queries_async`` — LLM-driven synonym expansion + code-built
+    OR-group queries, called by trigger_search and the background monitor.
+    Falls back to ``generate_queries`` on any error.
     """
 
     OPEN_ACCESS_SOURCES = {
@@ -108,9 +106,10 @@ class QueryGenerator:
 
         for source in self._allowed_sources(profile):
             for combo in base_combos[:max_queries_per_source]:
-                query_str = self._assemble_query(combo, profile, source)
                 queries.append(SearchQuery(
-                    query_string=query_str,
+                    query_string=_AND.join(
+                        f'"{t}"' if " " in t else t for t in combo
+                    ),
                     source_target=source,
                     researcher_id=profile.researcher_id,
                     base_terms=combo,
@@ -125,105 +124,129 @@ class QueryGenerator:
         profile: ResearcherProfile,
         *,
         max_queries_per_source: int = 3,
-        past_queries: list[str] | None = None,
     ) -> list[SearchQuery]:
-        """LLM-driven query generation with cross-product fallback."""
-        model = os.environ["LLM_SCORING_MODEL"]
-        allowed = self._allowed_sources(profile)
-        source_values = [s.value for s in allowed]
+        """Synonym-expansion + code-built OR-group queries.
 
-        if past_queries:
-            lines = "\n".join(f"  - {q}" for q in past_queries[-30:])
-            past_block = _PAST_QUERIES_BLOCK.format(lines=lines)
-        else:
-            past_block = ""
+        Step 1: ask the LLM for a synonym map (species synonyms + stress synonyms).
+        Step 2: build OR-group SearchQuery objects deterministically in code.
 
-        prompt = _LLM_QUERY_PROMPT.format(
-            species=", ".join(profile.plant_species) or "plant",
-            stresses=", ".join(s.value.replace("_", " ") for s in profile.stress_types)
-                     or "stress",
-            keywords=", ".join(profile.expertise_keywords[:5]) or "none",
-            months=profile.time_range_months,
-            sources=", ".join(source_values),
-            n_per_source=max_queries_per_source,
-            past_block=past_block,
+        The LLM only handles what it does reliably (listing synonyms); all query
+        structure — AND/OR logic, quoting, temporal filters — is built in code so
+        it can never appear as a stray search term.
+        """
+        synonyms = await self._expand_synonyms(profile)
+        queries = self._build_from_synonyms(profile, synonyms, max_queries_per_source)
+        if queries:
+            allowed = self._allowed_sources(profile)
+            logger.info(
+                "Generated %d queries for %s across %s",
+                len(queries),
+                profile.researcher_id,
+                [s.value for s in allowed],
+            )
+            return queries
+        logger.warning(
+            "Synonym expansion produced no queries for %s — falling back to cross-product",
+            profile.researcher_id,
         )
+        return self.generate_queries(profile, max_queries_per_source=max_queries_per_source)
 
+    # ── private helpers ───────────────────────────────────────────────────────
+
+    async def _expand_synonyms(self, profile: ResearcherProfile) -> dict:
+        """Call the LLM to get a synonym map. Returns empty dicts on failure."""
+        model = os.environ["LLM_SCORING_MODEL"]
+        prompt = _LLM_SYNONYM_PROMPT.format(
+            species=", ".join(profile.plant_species) or "plant",
+            stresses=", ".join(s.value for s in profile.stress_types) or "stress",
+        )
         try:
             response = await litellm.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=800,
-                temperature=0.3,
+                max_tokens=600,
+                temperature=0.1,
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content.strip()
             if raw.startswith("```"):
                 raw = raw.split("```")[1].lstrip("json").strip()
             data = json.loads(raw)
-            queries = self._parse_llm_queries(
-                data.get("queries", []), profile, allowed, max_queries_per_source
+            logger.debug(
+                "Synonym expansion for %s: %s",
+                profile.researcher_id,
+                json.dumps(data, ensure_ascii=False)[:300],
             )
-            if queries:
-                logger.info(
-                    "LLM generated %d queries for %s across %s",
-                    len(queries), profile.researcher_id, source_values,
-                )
-                return queries
-            logger.warning("LLM returned no valid queries; falling back to cross-product")
+            return data
         except Exception as exc:
             logger.warning(
-                "LLM query generation failed for %s, falling back: %s",
-                profile.researcher_id, exc,
+                "Synonym expansion failed for %s: %s — using bare terms",
+                profile.researcher_id,
+                exc,
             )
+            return {}
 
-        return self.generate_queries(profile, max_queries_per_source=max_queries_per_source)
+    def _build_from_synonyms(
+        self,
+        profile: ResearcherProfile,
+        synonyms: dict,
+        max_per_source: int,
+    ) -> list[SearchQuery]:
+        """Build OR-group SearchQuery objects from the LLM synonym map.
 
-    # ── private helpers ───────────────────────────────────────────────────────
+        For each (source, species, stress) triple we construct:
+          term_groups = [
+            [species, *species_synonyms],       ← OR-joined by the fetcher
+            [stress_str, *stress_synonyms],     ← OR-joined by the fetcher
+          ]
+        arXiv gets bioinformatics synonyms in group 2 instead of physiology terms.
+        """
+        allowed = self._allowed_sources(profile)
+        modifiers = self._build_modifiers(profile)
+        sp_syns: dict = synonyms.get("species", {})
+        st_syns: dict = synonyms.get("stresses", {})
+        queries: list[SearchQuery] = []
+
+        for source in allowed:
+            count = 0
+            for species, stress in cartesian(
+                profile.plant_species or ["plant"],
+                profile.stress_types or [],
+            ):
+                if count >= max_per_source:
+                    break
+
+                sp_group = [species] + [s for s in sp_syns.get(species, []) if s][:2]
+
+                st_str = stress.value.replace("_", " ")
+                extra = [s for s in st_syns.get(stress.value, []) if s][:4]
+
+                if source == SourceType.ARXIV:
+                    # arXiv: prepend bioinformatics terms to maximise recall on that server
+                    st_group = [st_str] + [t for t in _ARXIV_BIO_TERMS if t not in extra][:4]
+                else:
+                    st_group = [st_str] + extra
+
+                term_groups = [sp_group[:3], st_group[:5]]
+                flat = [grp[0] for grp in term_groups]
+
+                queries.append(SearchQuery(
+                    query_string=_AND.join(
+                        f'"{t}"' if " " in t else t for t in flat
+                    ),
+                    source_target=source,
+                    researcher_id=profile.researcher_id,
+                    base_terms=flat,
+                    term_groups=term_groups,
+                    contextual_modifiers=modifiers,
+                ))
+                count += 1
+
+        return queries
 
     def _allowed_sources(self, profile: ResearcherProfile) -> set[SourceType]:
         allowed = {SourceType(s) for s in (profile.source_targets or [])}
         return allowed or {s for s in SourceType if s != SourceType.OTHER}
-
-    def _parse_llm_queries(
-        self,
-        raw: list[dict],
-        profile: ResearcherProfile,
-        allowed: set[SourceType],
-        max_per_source: int,
-    ) -> list[SearchQuery]:
-        modifiers = self._build_modifiers(profile)
-        per_source: dict[SourceType, int] = {}
-        queries: list[SearchQuery] = []
-        seen_terms: set[str] = set()
-
-        for item in raw:
-            src_str = item.get("source", "")
-            terms = [t.strip() for t in (item.get("terms") or []) if t.strip()]
-            if not terms:
-                continue
-            try:
-                source = SourceType(src_str)
-            except ValueError:
-                continue
-            if source not in allowed:
-                continue
-            if per_source.get(source, 0) >= max_per_source:
-                continue
-            key = "|".join(terms)
-            if key in seen_terms:
-                continue
-            seen_terms.add(key)
-            per_source[source] = per_source.get(source, 0) + 1
-            query_str = self._assemble_query(terms, profile, source)
-            queries.append(SearchQuery(
-                query_string=query_str,
-                source_target=source,
-                researcher_id=profile.researcher_id,
-                base_terms=terms,
-                contextual_modifiers=modifiers,
-            ))
-        return queries
 
     def _build_base_combinations(self, profile: ResearcherProfile) -> list[list[str]]:
         species = profile.plant_species or ["plant"]
@@ -239,23 +262,3 @@ class QueryGenerator:
         if profile.expertise_keywords:
             modifiers["expertise"] = _AND.join(profile.expertise_keywords[:3])
         return modifiers
-
-    def _assemble_query(
-        self,
-        base_terms: list[str],
-        profile: ResearcherProfile,
-        source: SourceType,
-    ) -> str:
-        parts = [f'"{t}"' if " " in t else t for t in base_terms]
-        now = datetime.now(timezone.utc)
-        year_start = now.year - (profile.time_range_months // 12)
-        temporal = f"{year_start}..{now.year}"
-
-        if source in self.PAYWALL_SOURCES:
-            return _AND.join(parts) + _AND + temporal
-
-        query = _AND.join(parts) + _AND + temporal
-        if profile.expertise_keywords:
-            kw = _AND.join(profile.expertise_keywords[:2])
-            query += f" AND ({kw})"
-        return query

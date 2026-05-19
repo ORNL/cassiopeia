@@ -28,11 +28,20 @@ from typing import Any
 
 import os
 
+import re
+
 import aiohttp
 
 from models.schemas import PaperMetadata, SearchQuery, SourceType
 
+# Matches tokens that need no quoting in Lucene-style query strings.
+# Anything containing spaces, hyphens, slashes, etc. must be quoted.
+_SIMPLE_TOKEN = re.compile(r"^\w+$")
+
 logger = logging.getLogger(__name__)
+
+_AND = " AND "
+_OR = " OR "
 
 # Set DISABLE_SSL_VERIFY=true in the environment to bypass SSL certificate
 # verification — required when a corporate proxy intercepts HTTPS traffic
@@ -97,11 +106,7 @@ class _EuropePMCFetcher(BaseFetcher):
         query: SearchQuery,
         max_results: int = 20,
     ) -> list[PaperMetadata]:
-        terms = " AND ".join(
-            f'"{t}"' if " " in t else t
-            for t in query.base_terms[:3]
-            if t
-        )
+        terms = _epmc_query_terms(query)
         if not terms:
             return []
 
@@ -138,17 +143,33 @@ class _EuropePMCFetcher(BaseFetcher):
                 ) as resp:
                     if resp.status != 200:
                         logger.warning(
-                            "Europe PMC returned %d for %s",
+                            "Europe PMC returned HTTP %d for %s [%s]",
                             resp.status,
                             type(self).__name__,
+                            query.researcher_id,
                         )
                         return []
                     data = await resp.json()
         except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            logger.warning("%s network error: %s", type(self).__name__, exc)
+            logger.warning("%s network error [%s]: %s", type(self).__name__, query.researcher_id, exc)
             return []
 
-        return self._parse_europepmc(data)
+        hit_count = data.get("hitCount", 0)
+        logger.info(
+            "%s [%s]: API reports %d total hits",
+            type(self).__name__,
+            query.researcher_id,
+            hit_count,
+        )
+        papers = self._parse_europepmc(data)
+        logger.info(
+            "%s [%s]: returning %d papers (pageSize=%d)",
+            type(self).__name__,
+            query.researcher_id,
+            len(papers),
+            params["pageSize"],
+        )
+        return papers
 
     async def fetch_full_text(self, paper_id: str) -> str | None:
         """Fetch full text for PubMed Central open-access papers (PMC IDs only)."""
@@ -300,18 +321,18 @@ class ArxivFetcher(BaseFetcher):
     _NS = {
         "atom": "http://www.w3.org/2005/Atom",
         "arxiv": "http://arxiv.org/schemas/atom",
+        "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
     }
+
+    # arXiv rate-limits aggressively; retry with exponential backoff on 429/503
+    _RETRY_DELAYS: list[int] = [15, 45, 120]
 
     async def fetch(
         self,
         query: SearchQuery,
         max_results: int = 20,
     ) -> list[PaperMetadata]:
-        terms = " AND ".join(
-            f'all:"{t}"' if " " in t else f"all:{t}"
-            for t in query.base_terms[:3]
-            if t
-        )
+        terms = _arxiv_query_terms(query)
         if not terms:
             return []
 
@@ -321,41 +342,67 @@ class ArxivFetcher(BaseFetcher):
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }
-
         logger.info("arXiv fetch [%s]: %s", query.researcher_id, terms)
 
-        # arXiv rate-limits aggressively; retry with exponential backoff on 429/503
-        _RETRY_DELAYS = [15, 45, 120]
-        text = None
-        for attempt, delay in enumerate([0] + _RETRY_DELAYS):
-            if delay:
-                logger.info("arXiv retry %d/%d in %d s…", attempt, len(_RETRY_DELAYS), delay)
-                await asyncio.sleep(delay)
-            try:
-                async with _session() as session:
-                    async with session.get(
-                        self.BASE_URL,
-                        params=params,
-                        timeout=aiohttp.ClientTimeout(total=60),
-                    ) as resp:
-                        if resp.status in (429, 503):
-                            logger.warning("arXiv returned %d", resp.status)
-                            if attempt < len(_RETRY_DELAYS):
-                                continue
-                            return []
-                        if resp.status != 200:
-                            logger.warning("arXiv returned %d", resp.status)
-                            return []
-                        text = await resp.text()
-                        break
-            except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-                logger.warning("arXiv network error (attempt %d): %s: %s", attempt + 1, type(exc).__name__, exc)
-                if attempt >= len(_RETRY_DELAYS):
-                    return []
-
+        text = await self._fetch_with_retry(params, query.researcher_id)
         if text is None:
             return []
-        return self._parse_atom(text)
+
+        papers = self._parse_atom(text, query.researcher_id)
+        logger.info(
+            "arXiv [%s]: returning %d papers for query: %s",
+            query.researcher_id, len(papers), terms,
+        )
+        return papers
+
+    async def _fetch_with_retry(
+        self, params: dict[str, Any], researcher_id: str
+    ) -> str | None:
+        """GET the arXiv API with exponential-backoff retries; return body text or None."""
+        for attempt, delay in enumerate([0] + self._RETRY_DELAYS):
+            if delay:
+                logger.info(
+                    "arXiv retry %d/%d in %d s…", attempt, len(self._RETRY_DELAYS), delay
+                )
+                await asyncio.sleep(delay)
+            text, retry = await self._attempt_get(params, researcher_id, attempt)
+            if text is not None:
+                return text
+            if not retry:
+                return None
+        return None
+
+    async def _attempt_get(
+        self, params: dict[str, Any], researcher_id: str, attempt: int
+    ) -> tuple[str | None, bool]:
+        """Single HTTP GET attempt. Returns (body, retry_on_failure)."""
+        try:
+            async with _session() as session:
+                async with session.get(
+                    self.BASE_URL,
+                    params=params,
+                    timeout=aiohttp.ClientTimeout(total=60),
+                ) as resp:
+                    if resp.status in (429, 503):
+                        logger.warning("arXiv returned %d [%s]", resp.status, researcher_id)
+                        return None, attempt < len(self._RETRY_DELAYS)
+                    if resp.status != 200:
+                        logger.warning(
+                            "arXiv returned HTTP %d [%s]", resp.status, researcher_id
+                        )
+                        return None, False
+                    text = await resp.text()
+                    logger.debug(
+                        "arXiv HTTP 200 [%s]: response body %d bytes",
+                        researcher_id, len(text),
+                    )
+                    return text, False
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning(
+                "arXiv network error (attempt %d) [%s]: %s: %s",
+                attempt + 1, researcher_id, type(exc).__name__, exc,
+            )
+            return None, attempt < len(self._RETRY_DELAYS)
 
     async def fetch_full_text(self, paper_id: str) -> str | None:
         """Fetch full text from arXiv HTML rendering (available for most post-2020 papers)."""
@@ -383,15 +430,24 @@ class ArxivFetcher(BaseFetcher):
             logger.debug("arXiv full text fetch failed for %s: %s", paper_id, exc)
             return None
 
-    def _parse_atom(self, xml_text: str) -> list[PaperMetadata]:
+    def _parse_atom(self, xml_text: str, researcher_id: str = "") -> list[PaperMetadata]:
         try:
             root = ET.fromstring(xml_text)
         except ET.ParseError:
-            logger.warning("Failed to parse arXiv Atom XML")
+            logger.warning("Failed to parse arXiv Atom XML [%s]", researcher_id)
             return []
 
+        total_results = root.findtext("opensearch:totalResults", "?", self._NS)
+        entries = root.findall("atom:entry", self._NS)
+        logger.info(
+            "arXiv XML [%s]: opensearch:totalResults=%s, entry elements=%d",
+            researcher_id,
+            total_results,
+            len(entries),
+        )
+
         papers: list[PaperMetadata] = []
-        for entry in root.findall("atom:entry", self._NS):
+        for entry in entries:
             raw_id = entry.findtext("atom:id", "", self._NS)
             arxiv_id = raw_id.split("/abs/")[-1].strip()
 
@@ -457,6 +513,48 @@ FETCHER_REGISTRY: dict[SourceType, type[BaseFetcher]] = {
     SourceType.PLANT_PHYSIOLOGY: PlantPhysiologyFetcher,
     SourceType.ARXIV: ArxivFetcher,
 }
+
+
+def _epmc_query_terms(query: SearchQuery) -> str:
+    """Build Europe PMC keyword clause from term_groups (OR-within, AND-between).
+
+    Falls back to the flat base_terms list when term_groups is empty (cross-product
+    / rescue-pass queries).
+    """
+    if query.term_groups:
+        parts: list[str] = []
+        for group in query.term_groups:
+            tokens = [f'"{t}"' if " " in t else t for t in group if t]
+            if not tokens:
+                continue
+            parts.append(f"({_OR.join(tokens)})" if len(tokens) > 1 else tokens[0])
+        if parts:
+            return _AND.join(parts)
+    return _AND.join(f'"{t}"' if " " in t else t for t in query.base_terms[:3] if t)
+
+
+def _arxiv_query_terms(query: SearchQuery) -> str:
+    """Build arXiv search_query clause from term_groups (OR-within, AND-between).
+
+    Falls back to the flat base_terms list (capped at 2) for simple queries.
+    Terms containing any non-word character (spaces, hyphens, slashes…) are
+    quoted so arXiv's Lucene parser treats them as phrases, not operators.
+    """
+    def _tok(t: str) -> str:
+        return f'all:"{t}"' if not _SIMPLE_TOKEN.match(t) else f"all:{t}"
+
+    if query.term_groups:
+        parts: list[str] = []
+        for group in query.term_groups:
+            tokens = [_tok(t) for t in group if t]
+            if not tokens:
+                continue
+            parts.append(f"({_OR.join(tokens)})" if len(tokens) > 1 else tokens[0])
+        if parts:
+            return _AND.join(parts)
+    # Cap at 2 terms: arXiv has sparse plant-biology coverage; 3-way ANDs
+    # with rare species almost always return 0.
+    return _AND.join(_tok(t) for t in query.base_terms[:2] if t)
 
 
 def get_fetcher(source: SourceType, **kwargs: Any) -> BaseFetcher:

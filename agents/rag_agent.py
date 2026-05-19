@@ -92,7 +92,7 @@ KEY INSIGHTS RULE:
 exactly one entry per supporting paper, and each insight must be a finding \
 from that specific paper — not a synthesis across papers.
 
-Return a JSON object with a "proposals" array of 4-5 items:
+Return a JSON object with a "proposals" array of {n_proposals} items:
 {{
   "proposals": [
     {{
@@ -218,6 +218,7 @@ class SynthesisState(TypedDict):
     liked_proposals: list[dict]     # passthrough from caller for steering
     researcher_id: str              # for researcher-scoped ChromaDB queries
     max_iterations: int             # hard cap, from caller
+    n_proposals: int                # how many proposals to request from the LLM
 
 
 class RAGAgent(Agent):
@@ -360,6 +361,7 @@ class RAGAgent(Agent):
         methods: list[str],
         keywords: list[str] | None = None,
         n_papers: int = 12,
+        n_proposals: int = 5,
         liked_proposals: list[dict] | None = None,
         with_critique: bool = False,
         instruments: list[str] | None = None,
@@ -432,6 +434,7 @@ class RAGAgent(Agent):
                 keywords=", ".join(keywords or []) or "none",
                 context=self._build_context_blocks(hits),
                 preference_block=self._build_preference_block(liked_proposals),
+                n_proposals=n_proposals,
             )
             try:
                 proposals = await self._llm_proposals(prompt)
@@ -447,6 +450,7 @@ class RAGAgent(Agent):
                     liked_proposals=liked_proposals or [],
                     researcher_id=researcher_id,
                     max_iterations=max_iterations,
+                    n_proposals=n_proposals,
                 )
                 proposals = final_state["draft_proposals"]
                 for p in final_state["additional_papers"]:
@@ -679,6 +683,7 @@ class RAGAgent(Agent):
             keywords=", ".join(profile.get("keywords", [])) or "none",
             context=context,
             preference_block=preference_block,
+            n_proposals=state.get("n_proposals", 5),
         ) + refinement_block
 
         try:
@@ -769,6 +774,7 @@ class RAGAgent(Agent):
         liked_proposals: list[dict],
         researcher_id: str,
         max_iterations: int,
+        n_proposals: int = 5,
     ) -> dict:
         """Build and run the Augmentation C iterative synthesis StateGraph.
 
@@ -814,6 +820,7 @@ class RAGAgent(Agent):
             "liked_proposals": liked_proposals,
             "researcher_id": researcher_id,
             "max_iterations": max_iterations,
+            "n_proposals": n_proposals,
         }
         return await compiled.ainvoke(initial_state)
 

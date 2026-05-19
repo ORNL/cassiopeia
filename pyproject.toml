@@ -49,6 +49,12 @@ exclude = ["main*"]
 target-version = "py311"
 line-length = 88
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+markers = [
+    "integration: live network tests — skip with -m 'not integration'",
+]
+
 [tool.mypy]
 python_version = "3.11"
 strict = true

@@ -200,23 +200,34 @@ class LiteratureMiningAgent(Agent):
         if profile is None:
             return {"error": f"Unknown researcher: {researcher_id}"}
 
-        past = [q.query_string for q in self.state.query_history]
-        queries = await self.query_gen.generate_queries_async(profile, past_queries=past)
+        queries = await self.query_gen.generate_queries_async(profile)
         papers_found = 0
 
-        async def _fetch(query: SearchQuery) -> tuple[SearchQuery, list[PaperMetadata]]:
-            fetcher = get_fetcher(query.source_target)
-            return query, await fetcher.fetch(query, max_results=self.max_papers_per_query)
-
-        fetch_results = await asyncio.gather(
-            *(_fetch(q) for q in queries),
-            return_exceptions=True,
-        )
-
-        # Collect only papers not already in the store (same deduplication as background monitor)
         known_dois = self.store.known_dois(researcher_id)
         snapshot = list(self.state.scored_papers)
-        pairs = self._collect_new_pairs(researcher_id, fetch_results, known_dois)
+        pairs = self._collect_new_pairs(
+            researcher_id, await self._fetch_all(queries), known_dois
+        )
+
+        # Rescue pass: if every LLM query returned 0, retry with simple 2-term
+        # cross-product queries (species × stress) that are broad enough to always
+        # hit something.  Logs clearly so the rescue is visible.
+        if not pairs:
+            logger.warning(
+                "All %d LLM queries returned 0 new papers for %s — "
+                "rescue pass with broad fallback queries",
+                len(queries), researcher_id,
+            )
+            fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
+            pairs = self._collect_new_pairs(
+                researcher_id, await self._fetch_all(fallback), known_dois
+            )
+            if pairs:
+                logger.info("Rescue pass recovered %d new papers for %s", len(pairs), researcher_id)
+            else:
+                logger.warning(
+                    "Rescue pass also returned 0 for %s — sources have no matching papers", researcher_id
+                )
 
         await self._enrich_abstracts(pairs)
         logger.info("Fetched %d papers across %d queries — scoring…", len(pairs), len(queries))
@@ -408,22 +419,24 @@ class LiteratureMiningAgent(Agent):
         self, rid: str, profile: ResearcherProfile
     ) -> None:
         """Fetch and score new papers for one researcher."""
-        past = [q.query_string for q in self.state.query_history]
         queries = await self.query_gen.generate_queries_async(
-            profile, max_queries_per_source=3, past_queries=past
-        )
-
-        async def _fetch(q: SearchQuery) -> tuple[SearchQuery, list[PaperMetadata]]:
-            fetcher = get_fetcher(q.source_target)
-            return q, await fetcher.fetch(q, max_results=self.max_papers_per_query)
-
-        fetch_results = await asyncio.gather(
-            *(_fetch(q) for q in queries), return_exceptions=True
+            profile, max_queries_per_source=3
         )
 
         known_dois = self.store.known_dois(rid)
         snapshot = list(self.state.scored_papers)
-        pairs = self._collect_new_pairs(rid, fetch_results, known_dois)
+        pairs = self._collect_new_pairs(rid, await self._fetch_all(queries), known_dois)
+
+        if not pairs:
+            logger.warning(
+                "All %d LLM queries returned 0 new papers for %s — rescue pass",
+                len(queries), rid,
+            )
+            fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
+            pairs = self._collect_new_pairs(rid, await self._fetch_all(fallback), known_dois)
+            if pairs:
+                logger.info("Rescue pass recovered %d new papers for %s", len(pairs), rid)
+
         await self._enrich_abstracts(pairs)
 
         _sem = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "3")))
@@ -444,6 +457,12 @@ class LiteratureMiningAgent(Agent):
 
         self.store.save_llm_cache(self.scorer.export_cache())
         self.state.last_scan_time[rid] = datetime.now(timezone.utc)
+
+    async def _fetch_all(self, queries: list[SearchQuery]) -> list:
+        """Run all queries in parallel, returning raw gather results."""
+        async def _one(q: SearchQuery) -> tuple[SearchQuery, list[PaperMetadata]]:
+            return q, await get_fetcher(q.source_target).fetch(q, max_results=self.max_papers_per_query)
+        return await asyncio.gather(*(_one(q) for q in queries), return_exceptions=True)
 
     async def _enrich_abstracts(
         self, pairs: list[tuple[SearchQuery, PaperMetadata]]

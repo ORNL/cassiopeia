@@ -25,6 +25,7 @@ variable using LiteLLM's "<provider>/<model>" convention, e.g.:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -172,32 +173,8 @@ class LLMPaperScorer:
             abstract=paper.abstract[:6000],
         )
 
-        try:
-            response = await litellm.acompletion(
-                model=self._model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=384,
-                response_format={"type": "json_object"},
-                temperature=0.0,
-                timeout=15,
-            )
-            raw = response.choices[0].message.content.strip()
-            # Strip markdown fences if the model wrapped the JSON anyway
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            data = json.loads(raw)
-            result: dict[str, float | str] = {
-                "species_match": float(data.get("species_match", 0.5)),
-                "stress_match": float(data.get("stress_match", 0.5)),
-                "method_match": float(data.get("method_match", 0.5)),
-                "hypothesis": str(data.get("hypothesis", "")),
-            }
-        except Exception as exc:
-            logger.warning(
-                "LLM scoring failed for '%s', using keyword fallback: %s",
-                paper.title[:60],
-                exc,
-            )
+        result = await self._score_with_retry(prompt, paper.title)
+        if result is None:
             fb = self._fallback.score_paper(paper, profile)
             result = {
                 "species_match": fb.relevance.species_match,
@@ -208,6 +185,57 @@ class LLMPaperScorer:
 
         self._cache[paper.paper_id] = result
         return result
+
+    async def _score_with_retry(
+        self, prompt: str, title: str
+    ) -> dict[str, float | str] | None:
+        """Attempt LLM scoring up to 4 times with backoff; return None on terminal failure."""
+        _delays = [2, 8, 30]
+        for attempt, delay in enumerate([0] + _delays):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                return await self._one_llm_call(prompt)
+            except litellm.RateLimitError:
+                if attempt < len(_delays):
+                    logger.debug(
+                        "Rate-limited scoring '%s' (attempt %d) — retrying in %ds",
+                        title[:60], attempt + 1, _delays[attempt],
+                    )
+                else:
+                    logger.warning("LLM scoring rate-limited for '%s' — keyword fallback", title[:60])
+                    return None
+            except litellm.ContentPolicyViolationError:
+                # Azure's filter triggers on innocent plant biology text; fall back silently.
+                logger.debug("Content policy blocked scoring for '%s' — keyword fallback", title[:60])
+                return None
+            except Exception as exc:
+                logger.warning(
+                    "LLM scoring failed for '%s', using keyword fallback: %s", title[:60], exc,
+                )
+                return None
+        return None
+
+    async def _one_llm_call(self, prompt: str) -> dict[str, float | str]:
+        """Make a single LLM call and parse the JSON result."""
+        response = await litellm.acompletion(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=384,
+            response_format={"type": "json_object"},
+            temperature=0.0,
+            timeout=15,
+        )
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        data = json.loads(raw)
+        return {
+            "species_match": float(data.get("species_match", 0.5)),
+            "stress_match": float(data.get("stress_match", 0.5)),
+            "method_match": float(data.get("method_match", 0.5)),
+            "hypothesis": str(data.get("hypothesis", "")),
+        }
 
     @staticmethod
     def _score_novelty(

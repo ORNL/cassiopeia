@@ -149,6 +149,21 @@ async def lifespan(app: FastAPI):
         await manager.shutdown(_mining_handle, blocking=True)
         await manager.shutdown(_rag_handle, blocking=True)
 
+        # Ask litellm's background LoggingWorker to drain and stop cleanly before
+        # the event loop shuts down, preventing "Task destroyed but pending" errors.
+        try:
+            from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+            await GLOBAL_LOGGING_WORKER.stop()
+        except Exception:
+            pass
+        # Cancel any other lingering tasks so the loop closes cleanly.
+        pending = {t for t in asyncio.all_tasks() if t is not asyncio.current_task()}
+        if pending:
+            logger.debug("Cancelling %d lingering task(s) at shutdown", len(pending))
+            for t in pending:
+                t.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+
     _paper_store.close()
 
 
@@ -236,8 +251,17 @@ async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
             response_format={"type": "json_object"},
             temperature=0.0,
         )
-        data = _json.loads(response.choices[0].message.content)
-        return {"keywords": data.get("keywords", [])}
+        raw = response.choices[0].message.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1].lstrip("json").strip()
+        # If the model truncated mid-JSON, extract the keywords array directly.
+        import re as _re
+        m = _re.search(r'"keywords"\s*:\s*(\[[^\]]*\])', raw)
+        if m:
+            keywords = _json.loads(m.group(1))
+        else:
+            keywords = _json.loads(raw).get("keywords", [])
+        return {"keywords": [k for k in keywords if isinstance(k, str)]}
     except Exception as exc:
         logger.warning("keyword extraction failed: %s", exc)
         return {"keywords": []}
@@ -274,7 +298,22 @@ async def preview_queries(req: PreviewQueriesRequest) -> list[dict[str, str]]:
     return result[:12]
 
 
-async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
+def _n_proposals_for(papers_found: int) -> int:
+    """Scale proposal count with the number of newly fetched papers.
+
+    papers_found  →  n_proposals
+    0 – 24        →  2
+    25 – 49       →  3
+    50 – 74       →  4
+    75 – 99       →  5
+    100 – 124     →  6
+    …
+    200+          →  10  (cap)
+    """
+    return max(2, min(10, papers_found // 25 + 2))
+
+
+async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposals: int = 5) -> list:
     """Index papers, synthesise proposals (optionally with critique), and assess feasibility."""
     rag_combos: list = []
     try:
@@ -309,6 +348,7 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str]) -> list:
                 stresses=req.stress_types,
                 methods=req.phenotyping_methods,
                 keywords=req.expertise_keywords,
+                n_proposals=n_proposals,
                 liked_proposals=liked or None,
                 with_critique=req.with_critique,
                 instruments=equipment,
@@ -492,6 +532,38 @@ async def search_progress(researcher_id: str) -> dict[str, Any]:
     )
 
 
+async def _rag_synthesis_or_cached(
+    req: SearchRequest,
+    equipment: list[str],
+    papers_found: int,
+    n_proposals: int,
+) -> list:
+    """Run RAG synthesis or return cached proposals; schedule contradiction detection."""
+    if _rag_handle is None:
+        return []
+    existing_proposals = (
+        _paper_store.get_last_proposals(req.researcher_id) if _paper_store else []
+    )
+    if papers_found == 0 and existing_proposals:
+        logger.info(
+            "Skipping RAG synthesis — no new papers and %d proposals already exist",
+            len(existing_proposals),
+        )
+        rag_combos = existing_proposals
+    else:
+        try:
+            rag_combos = await asyncio.wait_for(
+                _run_rag_synthesis(req, equipment, n_proposals), timeout=600
+            )
+            logger.info("RAG synthesis complete — %d proposals generated", len(rag_combos))
+        except asyncio.TimeoutError:
+            logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
+            rag_combos = []
+    _contradictions_store.pop(req.researcher_id, None)
+    _schedule_contradictions(req.researcher_id)
+    return rag_combos
+
+
 @app.post("/api/search", responses={503: {"description": "Mining agent not ready"}})
 async def search(req: SearchRequest) -> dict[str, Any]:
     if _mining_handle is None or _agent_ctx is None:
@@ -542,26 +614,8 @@ async def search(req: SearchRequest) -> dict[str, Any]:
         len(papers), len(combos),
     )
 
-    rag_combos: list = []
-    existing_proposals = (
-        _paper_store.get_last_proposals(req.researcher_id) if _paper_store else []
-    )
-    skip_synthesis = papers_found == 0 and len(existing_proposals) > 0
-    if _rag_handle is not None:
-        if skip_synthesis:
-            logger.info(
-                "Skipping RAG synthesis — no new papers and %d proposals already exist",
-                len(existing_proposals),
-            )
-            rag_combos = existing_proposals
-        else:
-            try:
-                rag_combos = await asyncio.wait_for(_run_rag_synthesis(req, equipment), timeout=600)
-                logger.info("RAG synthesis complete — %d proposals generated", len(rag_combos))
-            except asyncio.TimeoutError:
-                logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
-        _contradictions_store.pop(req.researcher_id, None)
-        _schedule_contradictions(req.researcher_id)
+    n_proposals = _n_proposals_for(papers_found)
+    rag_combos = await _rag_synthesis_or_cached(req, equipment, papers_found, n_proposals)
 
     if _paper_store is not None:
         _paper_store.save_session(
