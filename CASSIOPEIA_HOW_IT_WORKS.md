@@ -6,7 +6,7 @@
 
 ## 1. What Is CASSIOPEIA?
 
-CASSIOPEIA is an automated literature monitoring and experiment-design assistant for plant biologists. You describe your research profile once — which plants you study, which stresses interest you, which methods you use — and the system continuously scans eight scientific databases, scores every paper it finds against your profile, and surfaces the most relevant ones. It also generates cross-paper experiment proposals and can detect contradictions between papers in its knowledge base.
+CASSIOPEIA is an automated literature monitoring and experiment-design assistant for plant biologists. You describe your research profile once — which plants you study, which stresses interest you, which methods you use — and the system continuously scans eight scientific databases, scores every paper it finds against your profile, and surfaces the most relevant ones. It also generates cross-paper experiment proposals — verifying that every cited finding actually appears in the paper it references and subjecting each proposal to a second-pass skeptical review — and can detect contradictions between papers in its knowledge base.
 
 The key design principle is a strict separation of roles:
 
@@ -18,33 +18,32 @@ The key design principle is a strict separation of roles:
 
 ## 2. System Components
 
-CASSIOPEIA has five main components that work together:
+CASSIOPEIA has four main components that work together:
 
 ```
-┌───────────────────────────────────────────────────────────────────┐
-│  User interfaces                                                   │
-│  ┌──────────────┐   ┌──────────────────┐   ┌────────────────────┐ │
-│  │ Landing Page │   │ Dashboard (React) │   │  Chat (Chainlit)   │ │
-│  └──────┬───────┘   └────────┬─────────┘   └────────┬───────────┘ │
-└─────────┼────────────────────┼─────────────────────-┼─────────────┘
-          │                    │                       │
-          └────────────────────┼───────────────────────┘
-                               │ HTTP (REST API)
-                       ┌───────▼────────┐
-                       │   API Server   │   ← FastAPI, port 8000
-                       └───────┬────────┘
-                               │ Academy RPC
-              ┌────────────────┴────────────────┐
-              │                                 │
-   ┌──────────▼───────────┐        ┌────────────▼────────┐
-   │  LiteratureMiningAgent│        │      RAGAgent        │
-   │  (data engine)        │        │  (semantic layer)    │
-   └──────────┬────────────┘        └──────────┬──────────┘
-              │                                │
-   ┌──────────▼────────────────────────────────▼──────────┐
-   │                Persistent storage                      │
-   │   SQLite (cassiopeia.db)   ChromaDB (chroma_db/)   │
-   └───────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│  User interfaces                                         │
+│        ┌──────────────┐   ┌──────────────────┐          │
+│        │ Landing Page │   │ Dashboard (React) │          │
+│        └──────┬───────┘   └────────┬─────────┘          │
+└───────────────┼────────────────────┼────────────────────┘
+                └─────────┬──────────┘
+                          │ HTTP (REST API)
+                  ┌───────▼────────┐
+                  │   API Server   │   ← FastAPI, port 8000
+                  └───────┬────────┘
+                          │ Academy RPC
+         ┌────────────────┴────────────────┐
+         │                                 │
+┌────────▼──────────────┐        ┌─────────▼───────────┐
+│  LiteratureMiningAgent│        │      RAGAgent        │
+│  (data engine)        │        │  (semantic layer)    │
+└────────┬──────────────┘        └─────────┬────────────┘
+         │                                 │
+┌────────▼─────────────────────────────────▼────────────┐
+│                 Persistent storage                      │
+│   SQLite (cassiopeia.db)   ChromaDB (chroma_db/)      │
+└───────────────────────────────────────────────────────┘
 ```
 
 ### 2.1 The API Server
@@ -76,11 +75,7 @@ The semantic layer. It:
 
 ### 2.4 The Dashboard
 
-A browser-based structured interface. You fill in forms to set your species, stresses, methods, scoring weights, and preferred sources. The dashboard then shows ranked papers, experiment proposals, feasibility assessments, contradiction detection, and semantic search. Useful when you know exactly what you want to configure.
-
-### 2.5 The Chat Interface
-
-A conversational interface that lets you describe your research in plain language. An AI assistant asks follow-up questions to build your profile, then triggers the search pipeline for you. Useful for a first-time setup or when you prefer to think out loud rather than fill in forms.
+A browser-based structured interface. You fill in forms to set your species, stresses, methods, scoring weights, and preferred sources. The dashboard then shows ranked papers, experiment proposals, feasibility assessments, contradiction detection, and semantic search. Useful when you know exactly what you want to configure. For experiment proposals, the dashboard also shows a verification note (how many cited claims were confirmed against their source papers, with a warning badge when the fraction is low) and a colour-coded critique chip indicating whether the AI reviewer recommends pursuing, refining, or deprioritizing each proposal.
 
 ---
 
@@ -104,21 +99,11 @@ In addition, the semantic search index (which allows finding papers by meaning r
 
 ### Step 1 — You submit a research profile
 
-**Via the Dashboard:** You fill in structured fields — species checkboxes, stress type selectors, source toggles, and sliders for four scoring dimensions (novelty, relevance, methodology, reproducibility).
-
-**Via the Chat:** You describe your research in natural language. The chat assistant extracts your profile information using an LLM and asks about topics you have not yet covered. This happens in any order — you can answer all four topics at once or spread them across multiple messages.
-
-The four topics the chat collects are:
-1. **Plant species & stress conditions** — which organisms and which stresses
-2. **Research keywords & time range** — your niche terms and how far back to search
-3. **Literature sources & scoring priorities** — which databases and how to weight the four scoring dimensions
-4. **Anchor paper** — optionally, a DOI or title of a paper that defines your research direction; the pipeline will also fetch papers semantically similar to it
-
-Once all four topics are covered, the assistant shows a plain-text summary and asks you to confirm or correct it. No search has happened yet at this point.
+You fill in structured fields in the dashboard: species checkboxes, stress type selectors, source toggles, and sliders for four scoring dimensions (novelty, relevance, methodology, reproducibility). You can also specify an anchor paper — a DOI or title of a paper that defines your research direction; the pipeline will also fetch papers semantically similar to it.
 
 ### Step 2 — Profile is registered
 
-Your confirmed profile is saved to SQLite under your researcher ID. If you registered before, the existing profile is overwritten. The system immediately generates a count of search queries (shown in the chat confirmation) to reassure you that the pipeline understood your profile.
+Your confirmed profile is saved to SQLite under your researcher ID. If you registered before, the existing profile is overwritten. The system generates a set of search queries to confirm it has correctly understood your profile.
 
 ### Step 3 — Search queries are generated
 
@@ -163,7 +148,7 @@ Newly scored papers are added to an internal index that captures the meaning of 
 
 ### Step 7 — Results are displayed
 
-The dashboard (or chat) shows the ranked paper list. For each paper you see:
+The dashboard shows the ranked paper list. For each paper you see:
 - Title, authors, journal, publication date, DOI link
 - Source database and open-access status
 - Six individual scores and an overall relevance score
@@ -174,25 +159,26 @@ The dashboard (or chat) shows the ranked paper list. For each paper you see:
 
 After the initial search, a background loop continues to run for all registered researchers. At a configurable interval (default: every 24 hours), it regenerates queries using the LLM, fetches new papers from all sources, and scores only papers not already in the database (identified by DOI). This means your knowledge base grows automatically without you having to manually trigger searches.
 
-**Seeing what is new since your last visit.** CASSIOPEIA records the time of each login. When you return — either by opening the dashboard or starting a chat session — the system compares the current knowledge base against what existed at your previous visit and reports how many papers arrived in the meantime. In the dashboard, a **🆕 New (N)** button appears in the Results filter bar; clicking it shows only those papers. In the chat, the welcome message tells you how many new papers were collected since your last session. Papers marked as new carry a small **NEW** badge in the results list so they remain easy to spot even when you are browsing the full collection.
+**Seeing what is new since your last visit.** CASSIOPEIA records the time of each login. When you return to the dashboard, the system compares the current knowledge base against what existed at your previous visit and reports how many papers arrived in the meantime. A **🆕 New (N)** button appears in the Results filter bar; clicking it shows only those papers. Papers marked as new carry a small **NEW** badge in the results list so they remain easy to spot even when you are browsing the full collection.
 
 ---
 
 ## 5. Post-Search Capabilities
 
-Once you have search results, both the dashboard and the chat offer further analysis.
+Once you have search results, the dashboard offers further analysis.
 
 ### 5.1 Experiment proposal generation
 
-Accessible from the dashboard's "Combinations" panel or by typing `combos` in the chat.
+Accessible from the dashboard's "Combinations" panel.
 
 The system:
 
 1. Ensures the internal semantic index is up to date.
-2. Retrieves the 12 papers most relevant to your profile by meaning (not just keywords).
-3. Sends **all 12 papers together** to the capable AI model, using up to 6,000 characters per paper — enough to cover the abstract, introduction, and beginning of the methods section for open-access papers, and the abstract alone for paywalled ones. The prompt specifically asks for cross-paper synergies: experiments that combine findings, methods, or observations from *multiple* papers.
+2. Retrieves the 12 papers most relevant to your profile by meaning (not just keywords), using up to 6,000 characters per paper — enough to cover the abstract, introduction, and beginning of the methods section for open-access papers, and the abstract alone for paywalled ones.
+3. Drafts 4–5 proposals from those papers, each built around cross-paper synergies: experiments that combine findings, methods, or observations from *multiple* papers. Rather than stopping there, the system then reviews its own draft — if a proposal hinges on a claim that would benefit from further evidence in the knowledge base, it issues a targeted follow-up search, retrieves additional relevant papers, and refines the proposals with that new context. This cycle repeats up to three times, or stops earlier once the proposals are well-grounded. The result is that proposals are anchored in the broadest relevant slice of your knowledge base, not just the papers retrieved at the outset.
 4. Returns 4–5 proposals, each with: a 2–4 word theme label, a 1–2 sentence experiment description, a rationale explaining what gap it fills, which papers it draws from, and which specific findings motivate it.
-5. Checks each proposal against the knowledge base to flag if a very similar experiment has already been described (novelty warning).
+5. **Verifies the evidence behind each proposal.** Every key finding cited in a proposal's rationale — "paper X showed that …" — is checked back against the paper it claims to cite. A fast AI model reads the paper's text and judges whether the stated insight is genuinely supported by what the paper says. The result is a small trust signal attached to every proposal: a count of how many cited claims were confirmed and how many were not. Proposals where a substantial fraction of claims could not be verified are flagged with a warning badge in the dashboard; all proposals show a "N out of M claims verified" note so you can assess the grounding at a glance. Nothing is hidden or dropped — you see every proposal alongside the evidence behind the evidence.
+6. **Red-teams each proposal with a skeptical reviewer.** A second AI pass evaluates every proposal on four questions: Has this experiment, or something very close to it, already been described in your knowledge base? What are the most likely confounds in the experimental design? Is the rationale well-supported by the papers it cites, or does it stretch them? And are there practical concerns — sample size, time horizon, statistical considerations — beyond whether the right instruments are available? The reviewer is instructed to be specific and concrete, and to say so explicitly when a dimension looks strong rather than inventing concerns. Each proposal comes back with an overall recommendation (pursue / refine / deprioritize) and a structured breakdown by dimension. In the dashboard, a colour-coded chip shows the recommendation at a glance; clicking it expands the full critique.
 
 If you have previously rated proposals with thumbs-up, those liked proposals are fed back into the prompt so the LLM steers towards unexplored territory.
 
@@ -202,13 +188,13 @@ For each proposal, the dashboard can ask the RAGAgent to assess whether the prop
 
 ### 5.3 Contradiction detection
 
-Accessible from the dashboard or by typing `contradictions` in the chat.
+Accessible from the dashboard.
 
 The system retrieves the 10 most semantically central papers in your knowledge base and sends them all to the capable AI model with a prompt asking for contradictory or conflicting findings — opposite effects of a treatment, disagreements about a mechanism, incompatible quantitative claims. Each reported contradiction includes which papers are involved, what each claims, and a possible resolution (e.g. "this discrepancy may reflect species-specific responses under different growth conditions").
 
 ### 5.4 Anchor-based similarity search
 
-If you specify a paper DOI or title (during profile collection or at any time in the chat), the system:
+If you specify a paper DOI or title (during profile setup or from the dashboard), the system:
 
 1. Fetches that paper's abstract from the literature database.
 2. Uses it as a starting point to search the internal semantic index for related papers.
@@ -216,26 +202,21 @@ If you specify a paper DOI or title (during profile collection or at any time in
 
 This is useful for finding papers that study the same mechanism or use similar methods as a paper you already know and trust.
 
-### 5.5 Free-form Q&A
-
-Via the chat (type any question about the papers), the AI reasons iteratively over your knowledge base: it decides what to search for, reads the results, and either searches again if it needs more context or synthesises an answer from what it found. This is the only place where the AI reasons in multiple steps — everywhere else, it is called once and produces a result directly.
-
 ---
 
 ## 6. Where AI Is Involved — Summary
 
 | Role | When | What it does |
 |---|---|---|
-| Intent classification | Chat: your first message | Determines whether you want to run a search, find related papers, ask a question, or just chat |
-| Profile extraction | Chat: during profile setup | Extracts structured fields from your natural-language descriptions |
 | Query generation | Before each search | Generates diverse, synonym-rich search terms tailored to each database |
 | Paper scoring | After each fetch | Scores species, stress, and method match; generates one hypothesis sentence per paper |
-| Combination synthesis | On demand | Reasons over 12 papers at once to find cross-paper experiment ideas |
+| Combination synthesis | On demand | Reasons iteratively over papers to find cross-paper experiment ideas |
+| Claim verification | After proposal generation | Checks each key finding cited in a proposal against the paper it references; flags proposals where a substantial fraction of claims are unsupported |
+| Proposal critique | After verification | Red-teams proposals on novelty, experimental confounds, evidence strength, and practical feasibility; returns a pursue / refine / deprioritize recommendation |
 | Feasibility assessment | On demand | Checks whether each proposal is executable with your available instruments |
 | Contradiction detection | On demand | Identifies conflicting claims across the top 10 papers |
-| Q&A | On demand | Iteratively searches the knowledge base to answer your questions |
 
-A fast, inexpensive model handles the high-volume tasks that run on every paper (query generation and scoring). A more capable model handles conversation and complex multi-paper reasoning (proposals, contradictions, Q&A).
+A fast, inexpensive model handles the high-volume tasks that run on every paper (query generation, scoring, and claim verification). A more capable model handles complex multi-paper reasoning (proposal drafting, critique, and contradiction detection).
 
 **What the AI is explicitly not allowed to do:**
 
@@ -245,7 +226,7 @@ A fast, inexpensive model handles the high-volume tasks that run on every paper 
 
 ---
 
-## 7. The Two AI Reasoning Tasks in Detail
+## 7. AI Reasoning Tasks in Detail
 
 ### Per-paper scoring
 
@@ -258,6 +239,8 @@ Scoring results are cached: if the same paper is encountered again in a future s
 ### Cross-paper proposal generation
 
 Rather than evaluating papers one by one, the AI receives up to 12 papers simultaneously and is asked to find connections *between* them — what could you discover by combining the method from one paper with the finding from another? Previously liked proposals are shown to the AI so it steers towards unexplored directions.
+
+After the initial proposals are drafted, two further AI passes run automatically. The first checks that every finding cited in a proposal's rationale is genuinely supported by the paper it references — catching cases where a claim has been subtly overstated or attributed to the wrong source. The second acts as a skeptical reviewer, evaluating each proposal for novelty, design confounds, and practical feasibility, and returning a concise recommendation alongside its reasoning. Together, these passes mean that by the time a proposal reaches you, it has been drafted, evidence-checked, and independently critiqued — not just generated.
 
 ---
 
