@@ -16,6 +16,7 @@ from models.schemas import (
     ScoredPaper,
     SourceType,
 )
+from utils.source_fetchers import SOURCE_REGISTRY
 
 
 class PaperScorer:
@@ -44,16 +45,13 @@ class PaperScorer:
     }
 
     # Source-level tier fallback used when the journal field is not populated.
-    # Maps SourceType values to the same two tiers.
-    _HIGH_IMPACT_SOURCES = {
-        SourceType.NATURE_COMMS,
-        SourceType.NEW_PHYTOLOGIST,
-        SourceType.PLANT_PHYSIOLOGY,
-    }
-    _MID_IMPACT_SOURCES = {
-        SourceType.FRONTIERS,
-        SourceType.PLOS_ONE,
-    }
+    # Derived from SOURCE_REGISTRY so adding new sources only requires one change.
+    _HIGH_IMPACT_SOURCES = frozenset(
+        src for src, info in SOURCE_REGISTRY.items() if info.impact == "high"
+    )
+    _MID_IMPACT_SOURCES = frozenset(
+        src for src, info in SOURCE_REGISTRY.items() if info.impact == "mid"
+    )
 
     def score_paper(
         self,

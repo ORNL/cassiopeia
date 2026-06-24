@@ -14,6 +14,7 @@ from itertools import product as cartesian
 import litellm
 
 from utils.json_utils import parse_json_response
+from utils.source_fetchers import SOURCE_REGISTRY
 
 from models.schemas import (
     ResearcherProfile,
@@ -79,19 +80,12 @@ class QueryGenerator:
     Falls back to ``generate_queries`` on any error.
     """
 
-    OPEN_ACCESS_SOURCES = {
-        SourceType.BIORXIV,
-        SourceType.PLOS_ONE,
-        SourceType.FRONTIERS,
-        SourceType.ARXIV,
-    }
-
-    PAYWALL_SOURCES = {
-        SourceType.PUBMED,
-        SourceType.NATURE_COMMS,
-        SourceType.NEW_PHYTOLOGIST,
-        SourceType.PLANT_PHYSIOLOGY,
-    }
+    OPEN_ACCESS_SOURCES = frozenset(
+        src for src, info in SOURCE_REGISTRY.items() if info.access == "open"
+    )
+    PAYWALL_SOURCES = frozenset(
+        src for src, info in SOURCE_REGISTRY.items() if info.access == "paywall"
+    )
 
     # ── public sync API (preview / registration count) ────────────────────────
 

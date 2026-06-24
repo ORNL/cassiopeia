@@ -23,8 +23,9 @@ import asyncio
 import logging
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 import os
 
@@ -500,18 +501,31 @@ class ArxivFetcher(BaseFetcher):
 
 
 # ─────────────────────────────────────────────────────
-# Fetcher registry
+# Source registry — single source of truth for all source metadata
 # ─────────────────────────────────────────────────────
 
+@dataclass(frozen=True)
+class SourceInfo:
+    """Metadata for a literature source."""
+    fetcher: type[BaseFetcher]
+    access: Literal["open", "paywall"]
+    impact: Literal["high", "mid", "low"]
+    label: str
+
+
+SOURCE_REGISTRY: dict[SourceType, SourceInfo] = {
+    SourceType.BIORXIV:          SourceInfo(BioRxivFetcher,           "open",    "low",  "bioRxiv"),
+    SourceType.PUBMED:           SourceInfo(PubMedFetcher,            "paywall", "low",  "PubMed"),
+    SourceType.FRONTIERS:        SourceInfo(FrontiersFetcher,         "open",    "mid",  "Frontiers"),
+    SourceType.PLOS_ONE:         SourceInfo(PlosOneFetcher,           "open",    "mid",  "PLoS ONE"),
+    SourceType.NATURE_COMMS:     SourceInfo(NatureCommsFetcher,       "paywall", "high", "Nature Comms"),
+    SourceType.NEW_PHYTOLOGIST:  SourceInfo(NewPhytologistFetcher,    "paywall", "high", "New Phytologist"),
+    SourceType.PLANT_PHYSIOLOGY: SourceInfo(PlantPhysiologyFetcher,   "paywall", "high", "Plant Physiology"),
+    SourceType.ARXIV:            SourceInfo(ArxivFetcher,             "open",    "low",  "arXiv"),
+}
+
 FETCHER_REGISTRY: dict[SourceType, type[BaseFetcher]] = {
-    SourceType.BIORXIV: BioRxivFetcher,
-    SourceType.PUBMED: PubMedFetcher,
-    SourceType.FRONTIERS: FrontiersFetcher,
-    SourceType.PLOS_ONE: PlosOneFetcher,
-    SourceType.NATURE_COMMS: NatureCommsFetcher,
-    SourceType.NEW_PHYTOLOGIST: NewPhytologistFetcher,
-    SourceType.PLANT_PHYSIOLOGY: PlantPhysiologyFetcher,
-    SourceType.ARXIV: ArxivFetcher,
+    src: info.fetcher for src, info in SOURCE_REGISTRY.items()
 }
 
 

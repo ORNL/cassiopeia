@@ -46,6 +46,7 @@ from models.schemas import ResearcherProfile, StressType
 from utils.json_utils import parse_json_response, strip_json_fence
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
+from utils.source_fetchers import SOURCE_REGISTRY
 
 init_logging(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -270,7 +271,9 @@ async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
         return {"keywords": []}
 
 
-_OPEN_SOURCES = {"biorxiv", "plos_one", "frontiers", "arxiv"}
+_OPEN_SOURCES = frozenset(
+    src.value for src, info in SOURCE_REGISTRY.items() if info.access == "open"
+)
 
 
 @app.post("/api/preview_queries")
