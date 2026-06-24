@@ -156,31 +156,17 @@ class _EuropePMCFetcher(BaseFetcher):
             return []
 
         hit_count = data.get("hitCount", 0)
-        logger.info(
-            "%s [%s]: API reports %d total hits",
-            type(self).__name__,
-            query.researcher_id,
-            hit_count,
-        )
         papers = self._parse_europepmc(data)
-        logger.info(
-            "%s [%s]: returning %d papers (pageSize=%d)",
-            type(self).__name__,
-            query.researcher_id,
-            len(papers),
-            params["pageSize"],
-        )
+        log = logger.debug if hit_count == 0 else logger.info
+        log("%s [%s]: %d hits, returning %d", type(self).__name__, query.researcher_id, hit_count, len(papers))
         return papers
 
     async def fetch_full_text(self, paper_id: str) -> str | None:
         """Fetch full text for PubMed Central open-access papers (PMC IDs only)."""
         if not paper_id.upper().startswith("PMC"):
             return None
-        numeric_id = paper_id.upper().replace("PMC", "", 1)
-        url = (
-            f"https://www.ebi.ac.uk/europepmc/webservices/rest/"
-            f"PMC/{numeric_id}/fullTextXML"
-        )
+        pmc_id = paper_id.upper()
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmc_id}/fullTextXML"
         try:
             async with _session() as session:
                 async with session.get(
@@ -199,6 +185,70 @@ class _EuropePMCFetcher(BaseFetcher):
         except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError) as exc:
             logger.warning("PMC full text fetch failed for %s: %s", paper_id, exc)
             return None
+
+    async def fetch_full_text_structured(self, paper_id: str) -> dict[str, str] | None:
+        """Fetch PMC full text as {section_label: text} preserving section boundaries.
+
+        Returns None for non-PMC papers or on fetch/parse failure.
+        Falls back to {"other": plain_text} for flat XML with no <sec> elements.
+        Recognised section labels: intro, methods, results, discussion, other.
+        The References section is silently dropped.
+        """
+        if not paper_id.upper().startswith("PMC"):
+            return None
+        pmc_id = paper_id.upper()
+        url = f"https://www.ebi.ac.uk/europepmc/webservices/rest/{pmc_id}/fullTextXML"
+        try:
+            async with _session() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=30)
+                ) as resp:
+                    if resp.status != 200:
+                        return None
+                    xml_text = await resp.text()
+            # Strip DOCTYPE — Python's expat rejects external DTD references in JATS XML.
+            xml_clean = re.sub(
+                r"<!DOCTYPE\b[^[>]*(?:\[[^\]]*\])?[^>]*>", "", xml_text, flags=re.DOTALL
+            ).strip()
+            root = ET.fromstring(xml_clean)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError) as exc:
+            logger.warning("PMC structured fetch failed for %s: %s", paper_id, exc)
+            return None
+
+        _LABEL_MAP = {
+            "intro": "intro", "introduction": "intro",
+            "material": "methods", "method": "methods", "methods": "methods",
+            "result": "results", "results": "results",
+            "discussion": "discussion", "conclusion": "discussion",
+            "conclusions": "discussion",
+        }
+        _SKIP = {"reference", "references", "ref", "supplementary", "supplemental",
+                 "acknowledgement", "acknowledgements", "acknowledgment"}
+
+        sections: dict[str, list[str]] = {}
+        for sec in root.iter("sec"):
+            title_el = sec.find("title")
+            raw = (title_el.text or "").lower().strip() if title_el is not None else ""
+            # Strip leading section numbers ("1.", "3.2.") common in JATS exports.
+            title = re.sub(r"^\d+(?:\.\d+)*\.?\s*", "", raw)
+            label = next(
+                (mapped for key, mapped in _LABEL_MAP.items() if title.startswith(key)),
+                "other",
+            )
+            if any(title.startswith(s) for s in _SKIP):
+                continue
+            parts = [p.text.strip() for p in sec.findall(".//p") if p.text and p.text.strip()]
+            if parts:
+                sections.setdefault(label, []).extend(parts)
+
+        if sections:
+            return {label: " ".join(texts) for label, texts in sections.items()}
+
+        # Flat XML fallback
+        all_text = " ".join(
+            p.text.strip() for p in root.findall(".//p") if p.text and p.text.strip()
+        )
+        return {"other": all_text} if all_text else None
 
     def _parse_europepmc(self, data: dict[str, Any]) -> list[PaperMetadata]:
         papers: list[PaperMetadata] = []
@@ -350,10 +400,8 @@ class ArxivFetcher(BaseFetcher):
             return []
 
         papers = self._parse_atom(text, query.researcher_id)
-        logger.info(
-            "arXiv [%s]: returning %d papers for query: %s",
-            query.researcher_id, len(papers), terms,
-        )
+        log = logger.debug if not papers else logger.info
+        log("arXiv [%s]: %d papers — %s", query.researcher_id, len(papers), terms)
         return papers
 
     async def _fetch_with_retry(
@@ -440,12 +488,6 @@ class ArxivFetcher(BaseFetcher):
 
         total_results = root.findtext("opensearch:totalResults", "?", self._NS)
         entries = root.findall("atom:entry", self._NS)
-        logger.info(
-            "arXiv XML [%s]: opensearch:totalResults=%s, entry elements=%d",
-            researcher_id,
-            total_results,
-            len(entries),
-        )
 
         papers: list[PaperMetadata] = []
         for entry in entries:

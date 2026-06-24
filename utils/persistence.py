@@ -55,12 +55,13 @@ class PaperStore:
             );
 
             CREATE TABLE IF NOT EXISTS papers (
-                paper_id      TEXT PRIMARY KEY,
-                researcher_id TEXT NOT NULL,
-                doi           TEXT,
-                data          TEXT NOT NULL,
-                rag_indexed   INTEGER NOT NULL DEFAULT 0,
-                added_at      TEXT NOT NULL DEFAULT (datetime('now'))
+                paper_id          TEXT PRIMARY KEY,
+                researcher_id     TEXT NOT NULL,
+                doi               TEXT,
+                data              TEXT NOT NULL,
+                rag_indexed       INTEGER NOT NULL DEFAULT 0,
+                full_text_indexed INTEGER NOT NULL DEFAULT 0,
+                added_at          TEXT NOT NULL DEFAULT (datetime('now'))
             );
             CREATE INDEX IF NOT EXISTS idx_papers_researcher
                 ON papers (researcher_id);
@@ -68,8 +69,21 @@ class PaperStore:
                 ON papers (doi);
             CREATE INDEX IF NOT EXISTS idx_papers_rag
                 ON papers (rag_indexed);
+            CREATE INDEX IF NOT EXISTS idx_papers_full_text
+                ON papers (full_text_indexed);
             CREATE INDEX IF NOT EXISTS idx_papers_added_at
                 ON papers (researcher_id, added_at);
+
+            CREATE TABLE IF NOT EXISTS chunks (
+                chunk_id    TEXT PRIMARY KEY,
+                paper_id    TEXT NOT NULL,
+                chunk_index INTEGER NOT NULL,
+                section     TEXT,
+                text        TEXT NOT NULL,
+                token_count INTEGER,
+                FOREIGN KEY (paper_id) REFERENCES papers(paper_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chunks_paper ON chunks (paper_id);
 
             CREATE TABLE IF NOT EXISTS user_logins (
                 researcher_id TEXT PRIMARY KEY,
@@ -127,6 +141,11 @@ class PaperStore:
         if "added_at" not in cols:
             self._conn.execute(
                 "ALTER TABLE papers ADD COLUMN added_at TEXT NOT NULL DEFAULT (datetime('now'))"
+            )
+            self._conn.commit()
+        if "full_text_indexed" not in cols:
+            self._conn.execute(
+                "ALTER TABLE papers ADD COLUMN full_text_indexed INTEGER NOT NULL DEFAULT 0"
             )
             self._conn.commit()
         sess_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sessions)")}
@@ -201,10 +220,12 @@ class PaperStore:
         """Insert or replace a scored paper (preserves rag_indexed flag and added_at)."""
         paper = scored.paper
         existing = self._conn.execute(
-            "SELECT rag_indexed, added_at FROM papers WHERE paper_id = ?", (paper.paper_id,)
+            "SELECT rag_indexed, full_text_indexed, added_at FROM papers WHERE paper_id = ?",
+            (paper.paper_id,),
         ).fetchone()
-        rag_indexed = existing["rag_indexed"] if existing else 0
-        added_at = existing["added_at"] if existing else datetime.now(timezone.utc).isoformat()
+        rag_indexed       = existing["rag_indexed"]       if existing else 0
+        full_text_indexed = existing["full_text_indexed"] if existing else 0
+        added_at          = existing["added_at"]          if existing else datetime.now(timezone.utc).isoformat()
 
         pub = None
         if paper.published_date:
@@ -214,6 +235,7 @@ class PaperStore:
             "paper_id": paper.paper_id,
             "title": paper.title,
             "abstract": paper.abstract,
+            "full_text": paper.full_text,
             "authors": paper.authors,
             "journal": paper.journal,
             "published": pub,
@@ -238,9 +260,10 @@ class PaperStore:
         }
         self._conn.execute(
             """INSERT OR REPLACE INTO papers
-               (paper_id, researcher_id, doi, data, rag_indexed, added_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (paper.paper_id, researcher_id, paper.doi, json.dumps(data), rag_indexed, added_at),
+               (paper_id, researcher_id, doi, data, rag_indexed, full_text_indexed, added_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (paper.paper_id, researcher_id, paper.doi, json.dumps(data),
+             rag_indexed, full_text_indexed, added_at),
         )
         self._conn.commit()
 
@@ -331,6 +354,68 @@ class PaperStore:
         self._conn.executemany(
             "UPDATE papers SET rag_indexed = 1 WHERE paper_id = ?",
             [(pid,) for pid in paper_ids],
+        )
+        self._conn.commit()
+
+    # ------------------------------------------------------------------
+    # Full-text chunking (Augmentation B)
+    # ------------------------------------------------------------------
+
+    def get_papers_needing_chunking(self) -> list[tuple[str, str, dict]]:
+        """Return (paper_id, researcher_id, data_dict) for abstract-indexed papers
+        that have not yet been full-text chunked."""
+        rows = self._conn.execute(
+            "SELECT paper_id, researcher_id, data FROM papers "
+            "WHERE rag_indexed = 1 AND full_text_indexed = 0"
+        ).fetchall()
+        return [
+            (row["paper_id"], row["researcher_id"], json.loads(row["data"]))
+            for row in rows
+        ]
+
+    def mark_full_text_indexed(self, paper_ids: list[str]) -> None:
+        self._conn.executemany(
+            "UPDATE papers SET full_text_indexed = 1 WHERE paper_id = ?",
+            [(pid,) for pid in paper_ids],
+        )
+        self._conn.commit()
+
+    def save_chunks(self, chunks: list[dict]) -> None:
+        self._conn.executemany(
+            """INSERT OR REPLACE INTO chunks
+               (chunk_id, paper_id, chunk_index, section, text, token_count)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            [
+                (c["chunk_id"], c["paper_id"], c["chunk_index"],
+                 c.get("section"), c["text"], c.get("token_count"))
+                for c in chunks
+            ],
+        )
+        self._conn.commit()
+
+    def get_chunks_for_paper(self, paper_id: str) -> list[dict]:
+        """Return all chunks for a paper ordered by chunk_index."""
+        rows = self._conn.execute(
+            "SELECT chunk_id, chunk_index, section, text, token_count "
+            "FROM chunks WHERE paper_id = ? ORDER BY chunk_index",
+            (paper_id,),
+        ).fetchall()
+        return [
+            {
+                "chunk_id": row["chunk_id"],
+                "paper_id": paper_id,
+                "chunk_index": row["chunk_index"],
+                "section": row["section"],
+                "text": row["text"],
+                "token_count": row["token_count"],
+            }
+            for row in rows
+        ]
+
+    def clear_verify_cache_for_paper(self, paper_id: str) -> None:
+        """Delete all verify_cache entries for a paper (called before chunk upgrade)."""
+        self._conn.execute(
+            "DELETE FROM verify_cache WHERE cache_key LIKE ?", (f"{paper_id}%",)
         )
         self._conn.commit()
 

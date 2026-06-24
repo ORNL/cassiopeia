@@ -50,7 +50,7 @@ def _proposal_id(suggestion: str) -> str:
 #   1 — original shape (key_insights: [{paper, insight}], no verification)
 #   2 — Augmentation A (key_insights: [{paper_id, insight}], +verification)
 #   3 — Augmentation D (+critique, when with_critique=True)
-_PROPOSAL_SCHEMA_VERSION = 3
+_PROPOSAL_SCHEMA_VERSION = 4
 
 # Augmentation C — iterative gather-evidence constants
 _MAX_ITERATIONS = 3
@@ -265,22 +265,99 @@ class RAGAgent(Agent):
 
     @action
     async def index_new_papers(self) -> dict[str, int]:
-        """Sync papers marked ``rag_indexed=0`` in SQLite into ChromaDB."""
+        """Sync new papers into ChromaDB (abstract pass) then upgrade to full-text chunks."""
+        # ── Step 1: abstract-index new papers ────────────────────────────────
         unindexed = self._store.get_unindexed_papers()
-        if not unindexed:
-            return {"indexed": 0, "total": self._rag.count()}
+        if unindexed:
+            items = [
+                (paper_id, abstract, {**meta, "paper_id": paper_id})
+                for paper_id, _researcher_id, abstract, meta in unindexed
+            ]
+            self._rag.add_papers_batch(items)
+            paper_ids = [paper_id for paper_id, *_ in unindexed]
+            self._store.mark_indexed(paper_ids)
+            logger.info("Indexed %d new papers into ChromaDB (abstract)", len(paper_ids))
 
-        items = [
-            (paper_id, abstract, meta)
-            for paper_id, _researcher_id, abstract, meta in unindexed
-        ]
-        self._rag.add_papers_batch(items)
+        # ── Step 2: full-text chunk upgrade ──────────────────────────────────
+        needing = self._store.get_papers_needing_chunking()
+        chunked_ids: list[str] = []
+        chunk_chroma_items: list[tuple] = []
 
-        paper_ids = [paper_id for paper_id, *_ in unindexed]
-        self._store.mark_indexed(paper_ids)
+        chunk_results = await asyncio.gather(
+            *[self._fetch_chunks_for_paper(pid, rid, data) for pid, rid, data in needing],
+            return_exceptions=True,
+        )
 
-        logger.info("Indexed %d new papers into ChromaDB", len(paper_ids))
-        return {"indexed": len(paper_ids), "total": self._rag.count()}
+        for (paper_id, researcher_id, data), result in zip(needing, chunk_results):
+            if isinstance(result, Exception):
+                logger.warning("Chunk fetch failed for %s: %s", paper_id, result)
+                continue
+
+            if result is None:
+                # Paywalled or no full text available: save abstract as fallback chunk
+                abstract = data.get("abstract") or ""
+                if abstract:
+                    fallback = {
+                        "chunk_id": f"{paper_id}:chunk_0",
+                        "paper_id": paper_id,
+                        "chunk_index": 0,
+                        "section": "abstract",
+                        "text": abstract[:6000],
+                        "token_count": None,
+                        "is_abstract_only": True,
+                    }
+                    self._store.save_chunks([fallback])
+                continue  # leave full_text_indexed=0 — retry next cycle
+
+            # Full text available: upgrade from abstract to chunks
+            self._store.clear_verify_cache_for_paper(paper_id)
+            self._rag.delete_paper(paper_id)
+            self._store.save_chunks(result)
+
+            meta_base = {
+                "paper_id":      paper_id,
+                "researcher_id": researcher_id,
+                "title":         data.get("title", ""),
+            }
+            for chunk in result:
+                chunk_chroma_items.append((
+                    chunk["chunk_id"],
+                    chunk["text"],
+                    {**meta_base, "section": chunk["section"],
+                     "chunk_index": chunk["chunk_index"], "is_abstract_only": False},
+                ))
+            chunked_ids.append(paper_id)
+
+        if chunk_chroma_items:
+            self._rag.add_papers_batch(chunk_chroma_items)
+        if chunked_ids:
+            self._store.mark_full_text_indexed(chunked_ids)
+            logger.info("Full-text chunked %d papers (%d chunks in ChromaDB)",
+                        len(chunked_ids), len(chunk_chroma_items))
+
+        return {
+            "indexed": len(unindexed),
+            "chunked": len(chunked_ids),
+            "total":   self._rag.count(),
+        }
+
+    async def _fetch_chunks_for_paper(
+        self, paper_id: str, researcher_id: str, data: dict
+    ) -> list[dict] | None:
+        """Fetch and chunk full text for one paper. Returns None for paywalled papers."""
+        from utils.chunker import fetch_and_chunk_paper
+        from utils.source_fetchers import get_fetcher, SourceType, FETCHER_REGISTRY
+
+        source_str = data.get("source", "other")
+        try:
+            source = SourceType(source_str)
+        except ValueError:
+            return None
+        if source not in FETCHER_REGISTRY:
+            return None
+
+        fetcher = get_fetcher(source)
+        return await fetch_and_chunk_paper(paper_id, source_str, fetcher)
 
     @action
     async def query(
@@ -316,13 +393,23 @@ class RAGAgent(Agent):
     def _rag_query(
         self, text: str, n_results: int, researcher_id: str | None = None
     ) -> list[dict]:
-        """Query ChromaDB, scoping to researcher when given.
+        """Query ChromaDB, deduplicated by paper_id (one result per paper).
 
-        Single point of entry for all RAG retrieval so augmentation B can
-        add chunk-level deduplication here without touching every caller.
+        Requests 3× from ChromaDB to account for multiple chunks per paper,
+        then keeps the highest-ranked chunk per paper up to n_results.
         """
         where = {"researcher_id": researcher_id} if researcher_id else None
-        return self._rag.query(text, n_results=n_results, where=where)
+        raw = self._rag.query(text, n_results=min(n_results * 3, 100), where=where)
+        seen: set[str] = set()
+        hits: list[dict] = []
+        for h in raw:
+            pid = h["paper_id"]
+            if pid not in seen:
+                seen.add(pid)
+                hits.append(h)
+            if len(hits) >= n_results:
+                break
+        return hits
 
     def _format_context_blocks(self, papers: list[dict], cap: int = 6000) -> str:
         """Format a list of {paper_id, document} dicts into numbered LLM context blocks.
@@ -369,6 +456,44 @@ class RAGAgent(Agent):
         raw = response.choices[0].message.content.strip()
         return parse_json_response(raw).get("proposals", [])
 
+    def _build_paper_texts(
+        self, hits: list[dict], chunk_budget: int
+    ) -> dict[str, str]:
+        """Build paper_id → text map using full-text chunks (OA) or hit document (paywalled).
+
+        Chunks are prioritised by section (methods/results first) and concatenated
+        up to *chunk_budget* tokens per paper.
+        """
+        from utils.chunker import SECTION_PRIORITY
+
+        result: dict[str, str] = {}
+        for hit in hits:
+            pid = hit["paper_id"]
+            if pid in result:
+                continue
+            chunks = self._store.get_chunks_for_paper(pid)
+            if not chunks:
+                result[pid] = hit["document"]
+                continue
+            sorted_chunks = sorted(
+                chunks,
+                key=lambda c: (
+                    SECTION_PRIORITY.index(c["section"])
+                    if c["section"] in SECTION_PRIORITY else len(SECTION_PRIORITY),
+                    c["chunk_index"],
+                ),
+            )
+            parts: list[str] = []
+            total = 0
+            for chunk in sorted_chunks:
+                t = chunk.get("token_count") or max(1, len(chunk["text"]) // 4)
+                if total + t > chunk_budget:
+                    break
+                parts.append(chunk["text"])
+                total += t
+            result[pid] = " ".join(parts) or hit["document"]
+        return result
+
     @action
     async def synthesize_combinations(
         self,
@@ -383,6 +508,7 @@ class RAGAgent(Agent):
         with_critique: bool = False,
         instruments: list[str] | None = None,
         max_iterations: int = _MAX_ITERATIONS,
+        chunk_budget_per_paper: int = 1200,
     ) -> list[dict[str, Any]]:
         """Generate cross-paper experiment proposals by reasoning over multiple abstracts.
 
@@ -434,7 +560,13 @@ class RAGAgent(Agent):
         if not hits:
             return []
 
-        paper_text_by_id: dict[str, str] = {h["paper_id"]: h["document"] for h in hits}
+        # Build per-paper text using full-text chunks (OA papers) or hit document.
+        paper_text_by_id = self._build_paper_texts(hits, chunk_budget_per_paper)
+        # Enrich hits with the richer text so _format_context_blocks gets full budget.
+        hits = [
+            {**h, "document": paper_text_by_id.get(h["paper_id"], h["document"])}
+            for h in hits
+        ]
         profile = {
             "species": species,
             "stresses": stresses,
@@ -571,11 +703,12 @@ class RAGAgent(Agent):
     ) -> dict:
         """Verify one key_insight against its source paper, with SQLite caching.
 
+        Uses full-text chunks from SQLite when available (methods/results first,
+        up to 2,000 tokens). Falls back to the passed paper_text (abstract).
         Cache key: "{paper_id}::{sha256(insight)}" — unique per (paper, insight) pair.
-        On cache hit the LLM is not called. On failure returns a null entry that
-        does not count toward the flagging threshold.
         """
         from utils.llm_verifier import verify_claim
+        from utils.chunker import SECTION_PRIORITY
 
         insight_hash = hashlib.sha256(insight.encode()).hexdigest()
         cache_key = f"{paper_id}::{insight_hash}"
@@ -584,9 +717,41 @@ class RAGAgent(Agent):
         if cached is not None:
             return {"claim": insight, "paper_id": paper_id, **cached}
 
-        result = await verify_claim(paper_text, insight)
+        chunks = self._store.get_chunks_for_paper(paper_id)
+        if chunks:
+            sorted_chunks = sorted(
+                chunks,
+                key=lambda c: (
+                    SECTION_PRIORITY.index(c["section"])
+                    if c["section"] in SECTION_PRIORITY else len(SECTION_PRIORITY),
+                    c["chunk_index"],
+                ),
+            )
+            parts: list[str] = []
+            total_tokens = 0
+            for chunk in sorted_chunks:
+                t = chunk.get("token_count") or max(1, len(chunk["text"]) // 4)
+                if total_tokens + t > 2000:
+                    break
+                parts.append(chunk["text"])
+                total_tokens += t
+            text_to_verify = " ".join(parts) or paper_text
+            first_chunk_id = chunks[0]["chunk_id"]
+            is_abstract_only = all(c.get("section") == "abstract" for c in chunks)
+        else:
+            text_to_verify = paper_text
+            first_chunk_id = None
+            is_abstract_only = True
+
+        result = await verify_claim(text_to_verify, insight)
         self._store.set_verify_cache(cache_key, result)
-        return {"claim": insight, "paper_id": paper_id, **result}
+        return {
+            "claim":            insight,
+            "paper_id":         paper_id,
+            "chunk_id":         first_chunk_id,
+            "is_abstract_only": is_abstract_only,
+            **result,
+        }
 
     async def _verify_proposal_claims(
         self,

@@ -123,5 +123,12 @@ class RAGStore:
             )
         return hits
 
+    def delete_paper(self, paper_id: str) -> None:
+        """Remove a paper's abstract entry from ChromaDB before chunk upgrade."""
+        try:
+            self._col.delete(ids=[paper_id])
+        except Exception:
+            pass  # not in collection — fine
+
     def count(self) -> int:
         return self._col.count()

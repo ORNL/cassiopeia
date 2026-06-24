@@ -121,6 +121,7 @@ class PaperMetadata:
     keywords: list[str] = field(default_factory=list)
     is_open_access: bool = False
     citation_count: int = 0
+    full_text: str | None = None
 
 
 @dataclass
