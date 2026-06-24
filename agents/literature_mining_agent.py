@@ -204,9 +204,10 @@ class LiteratureMiningAgent(Agent):
         papers_found = 0
 
         known_dois = self.store.known_dois(researcher_id)
+        known_ids  = self.store.known_paper_ids(researcher_id)
         snapshot = list(self.state.scored_papers)
         pairs = self._collect_new_pairs(
-            researcher_id, await self._fetch_all(queries), known_dois
+            researcher_id, await self._fetch_all(queries), known_dois, known_ids
         )
 
         # Rescue pass: if every LLM query returned 0, retry with simple 2-term
@@ -220,7 +221,7 @@ class LiteratureMiningAgent(Agent):
             )
             fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
             pairs = self._collect_new_pairs(
-                researcher_id, await self._fetch_all(fallback), known_dois
+                researcher_id, await self._fetch_all(fallback), known_dois, known_ids
             )
             if pairs:
                 logger.info("Rescue pass recovered %d new papers for %s", len(pairs), researcher_id)
@@ -424,8 +425,9 @@ class LiteratureMiningAgent(Agent):
         )
 
         known_dois = self.store.known_dois(rid)
+        known_ids  = self.store.known_paper_ids(rid)
         snapshot = list(self.state.scored_papers)
-        pairs = self._collect_new_pairs(rid, await self._fetch_all(queries), known_dois)
+        pairs = self._collect_new_pairs(rid, await self._fetch_all(queries), known_dois, known_ids)
 
         if not pairs:
             logger.warning(
@@ -433,7 +435,7 @@ class LiteratureMiningAgent(Agent):
                 len(queries), rid,
             )
             fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
-            pairs = self._collect_new_pairs(rid, await self._fetch_all(fallback), known_dois)
+            pairs = self._collect_new_pairs(rid, await self._fetch_all(fallback), known_dois, known_ids)
             if pairs:
                 logger.info("Rescue pass recovered %d new papers for %s", len(pairs), rid)
 
@@ -504,10 +506,17 @@ class LiteratureMiningAgent(Agent):
         rid: str,
         fetch_results: list,
         known_dois: set[str],
+        known_ids: set[str],
     ) -> list[tuple[SearchQuery, PaperMetadata]]:
-        """Extract (query, paper) pairs for papers not already in the store."""
+        """Extract (query, paper) pairs for papers not already in the store.
+
+        Deduplicates by DOI when available, falling back to paper_id so that
+        DOI-less papers (arXiv preprints, some preprints) are not re-scored on
+        every scan cycle.
+        """
         pairs: list[tuple[SearchQuery, PaperMetadata]] = []
-        seen: set[str] = set(known_dois)
+        seen_dois: set[str] = set(known_dois)
+        seen_ids: set[str] = set(known_ids)
         for result in fetch_results:
             if isinstance(result, BaseException):
                 logger.error("Monitor fetch error for %s: %s", rid, result)
@@ -515,9 +524,12 @@ class LiteratureMiningAgent(Agent):
             query, papers = result
             for paper in papers:
                 doi = paper.doi or ""
-                if doi and doi in seen:
+                if doi and doi in seen_dois:
+                    continue
+                if paper.paper_id in seen_ids:
                     continue
                 pairs.append((query, paper))
                 if doi:
-                    seen.add(doi)
+                    seen_dois.add(doi)
+                seen_ids.add(paper.paper_id)
         return pairs

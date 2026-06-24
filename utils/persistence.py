@@ -267,6 +267,14 @@ class PaperStore:
         ).fetchall()
         return {row["doi"] for row in rows}
 
+    def known_paper_ids(self, researcher_id: str) -> set[str]:
+        """Return all paper_ids stored for a researcher (fallback dedup key for DOI-less papers)."""
+        rows = self._conn.execute(
+            "SELECT paper_id FROM papers WHERE researcher_id = ?",
+            (researcher_id,),
+        ).fetchall()
+        return {row["paper_id"] for row in rows}
+
     def get_unindexed_papers(self) -> list[tuple[str, str, str, dict]]:
         """Return (paper_id, researcher_id, abstract, metadata) for un-indexed papers."""
         rows = self._conn.execute(
