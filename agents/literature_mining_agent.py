@@ -143,6 +143,8 @@ class LiteratureMiningAgent(Agent):
         self.state.researcher_profiles[researcher_id] = profile
         self.store.save_profile(profile)
 
+        queries = self.query_gen.generate_queries(profile)
+
         logger.info(
             "Registered researcher %s (%s) — %d queries generated",
             researcher_id,
