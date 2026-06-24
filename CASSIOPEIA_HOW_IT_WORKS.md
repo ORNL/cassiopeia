@@ -138,7 +138,7 @@ And one dimension uses text similarity against already-seen papers:
 
 - **Novelty** (0–1): papers whose titles are unlike everything already in the knowledge base score higher
 
-The six dimensions are combined using your four priority weights (novelty, relevance, methodology, reproducibility) into a single **overall score**, and a **credibility label** (High / Moderate / Preliminary / Conflicting) is assigned.
+Five of those dimensions are combined using your four priority weights (novelty, relevance, methodology, reproducibility) into a single **overall score**: species match, stress match, method match, credibility, and novelty. Recency is displayed on each paper card so you can see how fresh a paper is, but it does not affect the ranking — the background monitor already filters to recent publications, so the ranking prioritises how well a paper fits your profile rather than penalising older work. A **credibility label** (High / Moderate / Preliminary / Conflicting) is also assigned.
 
 The result is saved to the knowledge base and queued for semantic indexing.
 
