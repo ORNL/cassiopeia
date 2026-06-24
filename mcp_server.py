@@ -275,10 +275,11 @@ async def search_literature(
             before reading critique sub-fields.
     ======  ===================================================================
 
-    Cost note (v3): one synthesis call (LLM_CHAT_MODEL) + ~3N LLM_SCORING_MODEL
-    verification calls + N LLM_CHAT_MODEL critique calls per cycle.  For N=5
-    proposals that is ~21 LLM calls.  Pass ``with_critique=False`` (the
-    default) to skip the critic pass when latency or cost is a concern.
+    Cost note (v3): up to 3 iterative synthesis calls (LLM_CHAT_MODEL) +
+    ~3N LLM_SCORING_MODEL verification calls + N LLM_CHAT_MODEL critique
+    calls.  For N=5 proposals with ``with_critique=True`` that is ~23 LLM
+    calls.  Pass ``with_critique=False`` (the default) to skip the critic
+    pass when latency or cost is a concern.
 
     .. note::
         ``key_insights`` changed shape in Augmentation A from

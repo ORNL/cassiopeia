@@ -6,7 +6,7 @@
 
 ## 1. What Is CASSIOPEIA?
 
-CASSIOPEIA is an automated literature monitoring and experiment-design assistant for plant biologists. You describe your research profile once — which plants you study, which stresses interest you, which methods you use — and the system continuously scans eight scientific databases, scores every paper it finds against your profile, and surfaces the most relevant ones. It also generates cross-paper experiment proposals — verifying that every cited finding actually appears in the paper it references and subjecting each proposal to a second-pass skeptical review — and can detect contradictions between papers in its knowledge base.
+CASSIOPEIA is an automated literature monitoring and experiment-design assistant for plant biologists. You describe your research profile once — which plants you study, which stresses interest you, which methods you use — and the system continuously scans the scientific databases listed in your source profile (bioRxiv, PubMed, Frontiers, PLoS ONE, Nature Communications, New Phytologist, Plant Physiology, and arXiv — all or a subset of your choosing), scores every paper it finds against your profile, and surfaces the most relevant ones. It also generates cross-paper experiment proposals — verifying that every cited finding actually appears in the paper it references and subjecting each proposal to a second-pass skeptical review — and can detect contradictions between papers in its knowledge base.
 
 The key design principle is a strict separation of roles:
 
@@ -190,7 +190,7 @@ For each proposal, the dashboard can ask the RAGAgent to assess whether the prop
 
 Accessible from the dashboard.
 
-The system retrieves the 10 most semantically central papers in your knowledge base and sends them all to the capable AI model with a prompt asking for contradictory or conflicting findings — opposite effects of a treatment, disagreements about a mechanism, incompatible quantitative claims. Each reported contradiction includes which papers are involved, what each claims, and a possible resolution (e.g. "this discrepancy may reflect species-specific responses under different growth conditions").
+The system runs three passes over your knowledge base, each retrieving up to 20 semantically distinct abstracts and asking the capable AI model to identify contradictory or conflicting findings — opposite effects of a treatment, disagreements about a mechanism, incompatible quantitative claims. Results from all passes are deduplicated before display. Each reported contradiction includes which papers are involved, what each claims, and a possible resolution (e.g. "this discrepancy may reflect species-specific responses under different growth conditions").
 
 ### 5.4 Anchor-based similarity search
 
@@ -214,7 +214,7 @@ This is useful for finding papers that study the same mechanism or use similar m
 | Claim verification | After proposal generation | Checks each key finding cited in a proposal against the paper it references; flags proposals where a substantial fraction of claims are unsupported |
 | Proposal critique | After verification | Red-teams proposals on novelty, experimental confounds, evidence strength, and practical feasibility; returns a pursue / refine / deprioritize recommendation |
 | Feasibility assessment | On demand | Checks whether each proposal is executable with your available instruments |
-| Contradiction detection | On demand | Identifies conflicting claims across the top 10 papers |
+| Contradiction detection | On demand | Identifies conflicting claims across 3 passes × 20 papers, deduplicated |
 
 A fast, inexpensive model handles the high-volume tasks that run on every paper (query generation, scoring, and claim verification). A more capable model handles complex multi-paper reasoning (proposal drafting, critique, and contradiction detection).
 
