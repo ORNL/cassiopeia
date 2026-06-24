@@ -17,6 +17,7 @@ import pytest
 from models.schemas import SearchQuery, SourceType
 from utils.source_fetchers import (
     _arxiv_query_terms,
+    _epmc_mesh_clause,
     _epmc_query_terms,
     ArxivFetcher,
     BioRxivFetcher,
@@ -28,7 +29,7 @@ from utils.source_fetchers import (
     PubMedFetcher,
 )
 
-pytestmark = pytest.mark.integration
+_integration = pytest.mark.integration
 
 
 # ── Unit tests for OR-group query builders (no network) ───────────────────────
@@ -85,6 +86,56 @@ def test_arxiv_fallback_caps_at_two_terms():
     assert _arxiv_query_terms(q) == "all:arabidopsis AND all:drought"
 
 
+# ── MeSH clause builder (no network) ─────────────────────────────────────────
+
+def test_epmc_mesh_clause_empty():
+    assert _epmc_mesh_clause([]) == ""
+
+
+def test_epmc_mesh_clause_single():
+    assert _epmc_mesh_clause(["Droughts"]) == '"Droughts"[MeSH Terms]'
+
+
+def test_epmc_mesh_clause_multiple():
+    result = _epmc_mesh_clause(["Droughts", "Arabidopsis thaliana"])
+    assert result == '("Droughts"[MeSH Terms] OR "Arabidopsis thaliana"[MeSH Terms])'
+
+
+def test_epmc_query_terms_with_mesh():
+    q = SearchQuery(
+        query_string="",
+        source_target=SourceType.PUBMED,
+        researcher_id="test",
+        term_groups=[["arabidopsis"], ["drought"]],
+        mesh_terms=["Droughts", "Arabidopsis thaliana"],
+    )
+    result = _epmc_query_terms(q)
+    assert result.startswith("(arabidopsis AND drought) AND")
+    assert '"Droughts"[MeSH Terms]' in result
+    assert '"Arabidopsis thaliana"[MeSH Terms]' in result
+
+
+def test_epmc_query_terms_mesh_only():
+    q = SearchQuery(
+        query_string="",
+        source_target=SourceType.PUBMED,
+        researcher_id="test",
+        mesh_terms=["Droughts"],
+    )
+    result = _epmc_query_terms(q)
+    assert result == '"Droughts"[MeSH Terms]'
+
+
+def test_epmc_query_terms_no_mesh_unchanged():
+    q = SearchQuery(
+        query_string="",
+        source_target=SourceType.PUBMED,
+        researcher_id="test",
+        term_groups=[["arabidopsis"], ["drought"]],
+    )
+    assert _epmc_query_terms(q) == "arabidopsis AND drought"
+
+
 # ── Integration tests (real network) ─────────────────────────────────────────
 
 def _query(fetcher_cls, terms: list[str]) -> SearchQuery:
@@ -100,6 +151,7 @@ def _query(fetcher_cls, terms: list[str]) -> SearchQuery:
 # arXiv is a CS/physics server; use bioinformatics terms that reliably appear there.
 # Plant-specific terms (pennycress, nickel stress) return 0 on arXiv — that is
 # expected behaviour, not a fetcher bug.
+@_integration
 @pytest.mark.asyncio
 async def test_arxiv_returns_papers():
     fetcher = ArxivFetcher()
@@ -109,6 +161,7 @@ async def test_arxiv_returns_papers():
     assert papers[0].source == SourceType.ARXIV
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_biorxiv_returns_papers():
     fetcher = BioRxivFetcher()
@@ -118,6 +171,7 @@ async def test_biorxiv_returns_papers():
     assert papers[0].source == SourceType.BIORXIV
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_pubmed_returns_papers():
     fetcher = PubMedFetcher()
@@ -127,6 +181,7 @@ async def test_pubmed_returns_papers():
     assert papers[0].source == SourceType.PUBMED
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_frontiers_returns_papers():
     fetcher = FrontiersFetcher()
@@ -136,6 +191,7 @@ async def test_frontiers_returns_papers():
     assert papers[0].source == SourceType.FRONTIERS
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_plos_one_returns_papers():
     fetcher = PlosOneFetcher()
@@ -145,6 +201,7 @@ async def test_plos_one_returns_papers():
     assert papers[0].source == SourceType.PLOS_ONE
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_nature_comms_returns_papers():
     fetcher = NatureCommsFetcher()
@@ -154,6 +211,7 @@ async def test_nature_comms_returns_papers():
     assert papers[0].source == SourceType.NATURE_COMMS
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_new_phytologist_returns_papers():
     fetcher = NewPhytologistFetcher()
@@ -163,6 +221,7 @@ async def test_new_phytologist_returns_papers():
     assert papers[0].source == SourceType.NEW_PHYTOLOGIST
 
 
+@_integration
 @pytest.mark.asyncio
 async def test_plant_physiology_returns_papers():
     fetcher = PlantPhysiologyFetcher()

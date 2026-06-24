@@ -72,14 +72,14 @@ class LiteratureMiningAgent(Agent):
     ) -> None:
         super().__init__()
         self.state = AgentState()
-        self.query_gen = QueryGenerator()
         self.scorer = LLMPaperScorer()
         self.scan_interval = scan_interval_seconds
         self.max_papers_per_query = max_papers_per_query
 
-        # Persistent storage
+        # Persistent storage — created first so QueryGenerator can cache MeSH lookups
         _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
         self.store = PaperStore(_db)
+        self.query_gen = QueryGenerator(store=self.store)
 
         # Restore state from SQLite
         for profile in self.store.load_profiles():

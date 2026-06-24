@@ -206,3 +206,69 @@ async def test_falls_back_gracefully_on_llm_failure():
         # Without synonyms each group has exactly 1 term (species / stress)
         assert len(q.term_groups[0]) == 1
         assert len(q.term_groups[1]) >= 1
+
+
+# ── MeSH enrichment ───────────────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_mesh_enrichment_sets_terms_on_epmc_queries(tmp_path):
+    """EPMC queries receive mesh_terms; arXiv queries do not."""
+    from utils.persistence import PaperStore
+    store = PaperStore(tmp_path / "test.db")
+    profile = _fred_profile(sources=["biorxiv", "arxiv"])
+
+    _MESH = ["Droughts", "Drought", "Water Deficit"]
+
+    with (
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+        patch("utils.query_generator.expand_to_mesh", new=AsyncMock(return_value=_MESH)),
+        patch("utils.query_generator.asyncio.sleep", new=AsyncMock()),
+    ):
+        queries = await QueryGenerator(store=store).generate_queries_async(profile)
+
+    for q in queries:
+        if q.source_target == SourceType.ARXIV:
+            assert q.mesh_terms == [], f"arXiv query should have no MeSH terms: {q.mesh_terms}"
+        else:
+            assert q.mesh_terms == _MESH, f"EPMC query missing MeSH terms: {q.mesh_terms}"
+    store.close()
+
+
+@pytest.mark.asyncio
+async def test_mesh_enrichment_skipped_without_store():
+    """When no store is provided, mesh_terms must remain empty."""
+    profile = _fred_profile(sources=["biorxiv"])
+
+    with (
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+        patch("utils.query_generator.expand_to_mesh") as mock_expand,
+    ):
+        queries = await QueryGenerator().generate_queries_async(profile)
+
+    mock_expand.assert_not_called()
+    for q in queries:
+        assert q.mesh_terms == []
+
+
+@pytest.mark.asyncio
+async def test_mesh_enrichment_deduplicates_headings(tmp_path):
+    """Duplicate MeSH headings from multiple terms must be deduplicated."""
+    from utils.persistence import PaperStore
+    store = PaperStore(tmp_path / "test.db")
+    profile = _fred_profile(sources=["biorxiv"])
+
+    # Two terms both expand to overlapping sets
+    async def _expand(term, _store):
+        return ["Droughts", "Drought"] if "drought" in term else ["Droughts", "Plants"]
+
+    with (
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+        patch("utils.query_generator.expand_to_mesh", side_effect=_expand),
+        patch("utils.query_generator.asyncio.sleep", new=AsyncMock()),
+    ):
+        queries = await QueryGenerator(store=store).generate_queries_async(profile)
+
+    for q in queries:
+        if q.source_target != SourceType.ARXIV:
+            assert len(q.mesh_terms) == len(set(q.mesh_terms)), "Duplicate MeSH headings found"
+    store.close()

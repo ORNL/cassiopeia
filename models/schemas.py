@@ -103,6 +103,7 @@ class SearchQuery:
     term_groups: list[list[str]] = field(default_factory=list)
     contextual_modifiers: dict[str, str] = field(default_factory=dict)
     generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    mesh_terms: list[str] = field(default_factory=list)
 
 
 @dataclass

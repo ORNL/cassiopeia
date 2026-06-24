@@ -529,22 +529,46 @@ FETCHER_REGISTRY: dict[SourceType, type[BaseFetcher]] = {
 }
 
 
-def _epmc_query_terms(query: SearchQuery) -> str:
-    """Build Europe PMC keyword clause from term_groups (OR-within, AND-between).
+def _epmc_mesh_clause(mesh_terms: list[str]) -> str:
+    """Format bare MeSH headings as a Europe PMC MeSH clause.
 
-    Falls back to the flat base_terms list when term_groups is empty (cross-product
-    / rescue-pass queries).
+    Each heading becomes ``"Heading"[MeSH Terms]``.  Multiple headings are
+    OR-joined.  The ``[MeSH Terms]`` tag sits outside the quoted heading,
+    which is the correct EPMC Lucene syntax — do NOT pass these strings
+    through the normal space-quoting logic.
+
+    Examples:
+        ["Droughts"]
+        → '"Droughts"[MeSH Terms]'
+
+        ["Droughts", "Arabidopsis thaliana"]
+        → '("Droughts"[MeSH Terms] OR "Arabidopsis thaliana"[MeSH Terms])'
     """
-    if query.term_groups:
-        parts: list[str] = []
-        for group in query.term_groups:
-            tokens = [f'"{t}"' if " " in t else t for t in group if t]
-            if not tokens:
-                continue
+    if not mesh_terms:
+        return ""
+    tagged = [f'"{h}"[MeSH Terms]' for h in mesh_terms if h]
+    return f"({_OR.join(tagged)})" if len(tagged) > 1 else tagged[0]
+
+
+def _epmc_keyword_clause(query: SearchQuery) -> str:
+    """Return the keyword-only portion of an EPMC query (no MeSH)."""
+    if not query.term_groups:
+        return _AND.join(f'"{t}"' if " " in t else t for t in query.base_terms[:3] if t)
+    parts: list[str] = []
+    for group in query.term_groups:
+        tokens = [f'"{t}"' if " " in t else t for t in group if t]
+        if tokens:
             parts.append(f"({_OR.join(tokens)})" if len(tokens) > 1 else tokens[0])
-        if parts:
-            return _AND.join(parts)
-    return _AND.join(f'"{t}"' if " " in t else t for t in query.base_terms[:3] if t)
+    return _AND.join(parts)
+
+
+def _epmc_query_terms(query: SearchQuery) -> str:
+    """Build a full Europe PMC query: keyword clause AND optional MeSH clause."""
+    base_clause = _epmc_keyword_clause(query)
+    mesh_clause = _epmc_mesh_clause(query.mesh_terms)
+    if mesh_clause:
+        return f"({base_clause}) AND {mesh_clause}" if base_clause else mesh_clause
+    return base_clause
 
 
 def _arxiv_query_terms(query: SearchQuery) -> str:

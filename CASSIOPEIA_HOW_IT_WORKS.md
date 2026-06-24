@@ -109,6 +109,8 @@ Your confirmed profile is saved to SQLite under your researcher ID. If you regis
 
 This is the first time an LLM touches your scientific content. A fast, inexpensive model receives your profile and generates a set of search queries, one or more per database. The model is instructed to use precise scientific synonyms (e.g. "water deficit" for drought, "osmotic stress", "ABA signalling"), avoid naive repetition of species+stress, and produce meaningfully different queries across the allowed databases. If the LLM fails or returns nothing usable, the system falls back to a simpler cross-product of species × stress combinations.
 
+**MeSH-controlled vocabulary enrichment.** After the LLM synonym step, each query sent to an EPMC-backed source (bioRxiv, PubMed, PLOS ONE, Frontiers, Nature Communications, New Phytologist, and Plant Physiology) is automatically augmented with MeSH (Medical Subject Headings) terms. The system looks up every species, stress, and keyword from your profile in the NCBI MeSH vocabulary, retrieves the standardised preferred headings and their synonyms, and appends them as a `"Heading"[MeSH Terms]` clause. Because the journals indexed by Europe PMC use MeSH for controlled indexing, papers that use entirely different vocabulary from your search terms — but are tagged with the right controlled heading by journal editors — are now reachable. Results from this MeSH lookup are cached locally for 30 days so the NCBI calls only happen on the first scan with a given profile term, and not on every subsequent one. arXiv queries are not affected (arXiv does not use MeSH).
+
 **Query diversity across repeated searches.** Every time queries are generated, the full list of queries used in all previous searches is passed to the LLM with the instruction not to repeat them verbatim, but to use synonyms, related mechanisms, or different phenotypic angles instead. This steers each successive scan towards unexplored corners of the literature rather than reproducing the same set of searches.
 
 ### Step 4 — Papers are fetched
@@ -227,6 +229,12 @@ A fast, inexpensive model handles the high-volume tasks that run on every paper 
 ---
 
 ## 7. AI Reasoning Tasks in Detail
+
+### Query generation
+
+Each scan runs in two stages. First, an LLM is asked to produce a synonym map — alternative scientific names for each species and stress type in your profile. The system then assembles queries from this map in code: each query has an OR-group for species synonyms and an OR-group for stress synonyms, joined by AND. The LLM is only responsible for listing synonyms; all query syntax is built deterministically so no year ranges or malformed terms can leak in.
+
+Second, every EPMC-targeted query is enriched with MeSH terms: the system maps each profile term to its NCBI MeSH preferred heading and entry-term synonyms, formats them as `"Heading"[MeSH Terms]` clauses, and appends them with AND so the final query combines the researcher-specific keyword search with the journal-standardised controlled vocabulary. This is transparent — you do not need to know MeSH to benefit from it.
 
 ### Per-paper scoring
 
