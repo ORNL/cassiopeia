@@ -13,6 +13,8 @@ from itertools import product as cartesian
 
 import litellm
 
+from utils.json_utils import parse_json_response
+
 from models.schemas import (
     ResearcherProfile,
     SearchQuery,
@@ -169,9 +171,7 @@ class QueryGenerator:
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            data = json.loads(raw)
+            data = parse_json_response(raw)
             logger.debug(
                 "Synonym expansion for %s: %s",
                 profile.researcher_id,

@@ -22,6 +22,8 @@ import os
 
 import litellm
 
+from utils.json_utils import parse_json_response
+
 logger = logging.getLogger(__name__)
 
 _CRITIC_PROMPT = """\
@@ -192,9 +194,7 @@ async def critique_proposal(
                 timeout=120,
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            data = json.loads(raw)
+            data = parse_json_response(raw)
             # Validate required keys — raises KeyError to trigger retry
             for key in ("novelty", "evidence_strength", "overall_recommendation", "summary"):
                 if key not in data:

@@ -21,6 +21,8 @@ import os
 
 import litellm
 
+from utils.json_utils import parse_json_response
+
 logger = logging.getLogger(__name__)
 
 _VERIFY_PROMPT = """\
@@ -77,9 +79,7 @@ async def verify_claim(
                 timeout=15,
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            data = json.loads(raw)
+            data = parse_json_response(raw)
             return {
                 "supported": bool(data["supported"]),
                 "confidence": float(data.get("confidence", 0.0)),

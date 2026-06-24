@@ -33,6 +33,7 @@ litellm.drop_params = True
 
 from academy.agent import Agent, action
 
+from utils.json_utils import parse_json_response
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
 from utils.source_fetchers import _session as _aiohttp_session
@@ -356,9 +357,7 @@ class RAGAgent(Agent):
             timeout=180,
         )
         raw = response.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1].lstrip("json").strip()
-        return json.loads(raw).get("proposals", [])
+        return parse_json_response(raw).get("proposals", [])
 
     @action
     async def synthesize_combinations(
@@ -760,9 +759,7 @@ class RAGAgent(Agent):
                 timeout=60,
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            data = json.loads(raw)
+            data = parse_json_response(raw)
             sub_queries = [str(q) for q in data.get("sub_queries", [])][:_MAX_SUB_QUERIES_PER_ITERATION]
             done = bool(data.get("done", False))
             if not sub_queries:  # defensive: done: false but no queries → treat as done
@@ -935,9 +932,7 @@ class RAGAgent(Agent):
                 timeout=120,
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            return json.loads(raw)
+            return parse_json_response(raw)
         except Exception as exc:
             logger.warning("assess_feasibility failed for proposal: %s", exc)
             return {
@@ -982,9 +977,7 @@ class RAGAgent(Agent):
                 timeout=150,
             )
             raw = response.choices[0].message.content.strip()
-            if raw.startswith("```"):
-                raw = raw.split("```")[1].lstrip("json").strip()
-            contradictions = json.loads(raw).get("contradictions", [])
+            contradictions = parse_json_response(raw).get("contradictions", [])
         except Exception as exc:
             logger.warning("detect_contradictions pass '%s' failed: %s", query, exc)
             return []

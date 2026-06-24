@@ -43,6 +43,7 @@ from academy.manager import Manager
 from agents.literature_mining_agent import LiteratureMiningAgent
 from agents.rag_agent import RAGAgent
 from models.schemas import ResearcherProfile, StressType
+from utils.json_utils import parse_json_response, strip_json_fence
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
 
@@ -255,9 +256,7 @@ async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
             response_format={"type": "json_object"},
             temperature=0.0,
         )
-        raw = response.choices[0].message.content.strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1].lstrip("json").strip()
+        raw = strip_json_fence(response.choices[0].message.content.strip())
         # If the model truncated mid-JSON, extract the keywords array directly.
         import re as _re
         m = _re.search(r'"keywords"\s*:\s*(\[[^\]]*\])', raw)
