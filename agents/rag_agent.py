@@ -296,8 +296,7 @@ class RAGAgent(Agent):
             n_results: Maximum number of results to return.
             researcher_id: If given, restrict results to that researcher's papers.
         """
-        where = {"researcher_id": researcher_id} if researcher_id else None
-        hits = self._rag.query(text, n_results=n_results, where=where)
+        hits = self._rag_query(text, n_results, researcher_id)
 
         results = []
         for hit in hits:
@@ -313,6 +312,17 @@ class RAGAgent(Agent):
                 }
             )
         return results
+
+    def _rag_query(
+        self, text: str, n_results: int, researcher_id: str | None = None
+    ) -> list[dict]:
+        """Query ChromaDB, scoping to researcher when given.
+
+        Single point of entry for all RAG retrieval so augmentation B can
+        add chunk-level deduplication here without touching every caller.
+        """
+        where = {"researcher_id": researcher_id} if researcher_id else None
+        return self._rag.query(text, n_results=n_results, where=where)
 
     def _format_context_blocks(self, papers: list[dict], cap: int = 6000) -> str:
         """Format a list of {paper_id, document} dicts into numbered LLM context blocks.
@@ -420,8 +430,7 @@ class RAGAgent(Agent):
             return []
 
         query_text = " ".join(species + stresses + methods + (keywords or []))
-        where = {"researcher_id": researcher_id} if researcher_id else None
-        hits = self._rag.query(query_text, n_results=n_papers, where=where)
+        hits = self._rag_query(query_text, n_papers, researcher_id)
         if not hits:
             return []
 
@@ -673,7 +682,7 @@ class RAGAgent(Agent):
         from utils.llm_critic import critique_proposal
 
         suggestion = proposal.get("suggestion", "")
-        similar_hits = self._rag.query(suggestion, n_results=5) if suggestion else []
+        similar_hits = self._rag_query(suggestion, 5) if suggestion else []
 
         similar_papers = []
         for hit in similar_hits:
@@ -766,11 +775,10 @@ class RAGAgent(Agent):
             {p["paper_id"] for p in state["initial_papers"]}
             | {p["paper_id"] for p in state["additional_papers"]}
         )
-        where = {"researcher_id": state["researcher_id"]} if state["researcher_id"] else None
-
+        rid = state["researcher_id"]
         new_papers: list[dict] = []
         for query in state["pending_sub_queries"]:
-            hits = self._rag.query(query, n_results=_SUB_QUERY_TOP_K, where=where)
+            hits = self._rag_query(query, _SUB_QUERY_TOP_K, rid)
             for hit in hits:
                 if hit["paper_id"] not in existing_ids:
                     existing_ids.add(hit["paper_id"])
@@ -856,8 +864,7 @@ class RAGAgent(Agent):
         Returns ``(is_novel, warning_message)``.  ``is_novel`` is False when a
         very similar abstract already exists in ChromaDB (distance < 0.3).
         """
-        where = {"researcher_id": researcher_id}
-        hits = self._rag.query(suggestion, n_results=1, where=where)
+        hits = self._rag_query(suggestion, 1, researcher_id)
         if not hits:
             return True, ""
         distance = hits[0].get("distance", 1.0)
@@ -1054,8 +1061,7 @@ class RAGAgent(Agent):
             )
             return []
 
-        where = {"researcher_id": researcher_id} if researcher_id else None
-        hits = self._rag.query(abstract, n_results=n_results, where=where)
+        hits = self._rag_query(abstract, n_results, researcher_id)
 
         results = []
         for hit in hits:
@@ -1132,19 +1138,15 @@ class RAGAgent(Agent):
         from langchain_community.chat_models import ChatLiteLLM
         from langgraph.prebuilt import create_react_agent
 
-        rag = self._rag
-        store = self._store
-
         @lc_tool
         def search_knowledge_base(query: str) -> str:
             """Search the plant biology paper knowledge base for relevant passages."""
-            where = {"researcher_id": researcher_id} if researcher_id else None
-            hits = rag.query(query, n_results=5, where=where)
+            hits = self._rag_query(query, 5, researcher_id)
             if not hits:
                 return "No relevant papers found."
             parts = []
             for hit in hits:
-                meta = store.get_paper_metadata(hit["paper_id"]) or {}
+                meta = self._store.get_paper_metadata(hit["paper_id"]) or {}
                 title = meta.get("title", "Unknown")
                 parts.append(f"[{title}]\n{hit['document'][:500]}")
             return "\n\n---\n\n".join(parts)
