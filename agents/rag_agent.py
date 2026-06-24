@@ -314,20 +314,20 @@ class RAGAgent(Agent):
             )
         return results
 
-    def _build_context_blocks(self, hits: list[dict]) -> str:
-        """Format knowledge-base hits into numbered text blocks for LLM prompts.
+    def _format_context_blocks(self, papers: list[dict], cap: int = 6000) -> str:
+        """Format a list of {paper_id, document} dicts into numbered LLM context blocks.
 
-        Each block header includes the paper_id so the LLM can use it in
-        [paper_id] citation tags and key_insights entries.
-        Uses up to 6000 characters per paper.
+        Each block header includes paper_id so the LLM can use it in [paper_id]
+        citation tags. ``cap`` limits characters per paper (use a lower value for
+        passes that scan many papers, e.g. contradiction detection at 500).
         """
         blocks = []
-        for i, hit in enumerate(hits, 1):
-            paper_id = hit["paper_id"]
+        for i, p in enumerate(papers, 1):
+            paper_id = p["paper_id"]
             meta = self._store.get_paper_metadata(paper_id) or {}
             title = meta.get("title", "Unknown")
             blocks.append(
-                f"[Paper {i} | paper_id: {paper_id}] {title}\n{hit['document'][:6000]}"
+                f"[Paper {i} | paper_id: {paper_id}] {title}\n{p['document'][:cap]}"
             )
         return "\n\n".join(blocks)
 
@@ -466,7 +466,7 @@ class RAGAgent(Agent):
             stresses=", ".join(stresses) or "unspecified",
             methods=", ".join(methods) or "unspecified",
             keywords=", ".join(keywords or []) or "none",
-            context=self._build_context_blocks(hits),
+            context=self._format_context_blocks(hits),
             preference_block=self._build_preference_block(liked_proposals),
             n_proposals=n_proposals,
         )
@@ -686,23 +686,12 @@ class RAGAgent(Agent):
 
         return await critique_proposal(proposal, similar_papers, instruments)
 
-    def _build_context_from_papers(self, papers: list[dict]) -> str:
-        """Format {paper_id, document} state-dicts into numbered context blocks for LLM prompts."""
-        blocks = []
-        for i, p in enumerate(papers, 1):
-            paper_id = p["paper_id"]
-            meta = self._store.get_paper_metadata(paper_id) or {}
-            title = meta.get("title", "Unknown")
-            blocks.append(
-                f"[Paper {i} | paper_id: {paper_id}] {title}\n{p['document'][:6000]}"
-            )
-        return "\n\n".join(blocks)
 
     async def _propose_node(self, state: dict) -> dict:
         """Propose step: one LLM_CHAT_MODEL call to generate or refine draft proposals."""
         profile = state["profile"]
         all_papers = state["initial_papers"] + state["additional_papers"]
-        context = self._build_context_from_papers(all_papers)
+        context = self._format_context_blocks(all_papers)
         preference_block = self._build_preference_block(state["liked_proposals"])
 
         refinement_block = ""
