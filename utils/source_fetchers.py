@@ -196,8 +196,8 @@ class _EuropePMCFetcher(BaseFetcher):
                     parts.append(elem.text.strip())
             text = " ".join(p for p in parts if p)
             return text if len(text) > 200 else None
-        except Exception as exc:
-            logger.debug("PMC full text fetch failed for %s: %s", paper_id, exc)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError) as exc:
+            logger.warning("PMC full text fetch failed for %s: %s", paper_id, exc)
             return None
 
     def _parse_europepmc(self, data: dict[str, Any]) -> list[PaperMetadata]:
@@ -427,8 +427,8 @@ class ArxivFetcher(BaseFetcher):
             text = re.sub(r"<[^>]+>", " ", html)
             text = re.sub(r"\s+", " ", text).strip()
             return text if len(text) > 200 else None
-        except Exception as exc:
-            logger.debug("arXiv full text fetch failed for %s: %s", paper_id, exc)
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("arXiv full text fetch failed for %s: %s", paper_id, exc)
             return None
 
     def _parse_atom(self, xml_text: str, researcher_id: str = "") -> list[PaperMetadata]:

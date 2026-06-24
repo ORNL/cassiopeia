@@ -481,7 +481,7 @@ class RAGAgent(Agent):
         )
         try:
             return await self._llm_proposals(prompt)
-        except Exception as exc:
+        except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("synthesize_combinations (single-shot) failed: %s", exc)
             return None
 
@@ -723,7 +723,7 @@ class RAGAgent(Agent):
 
         try:
             proposals = await self._llm_proposals(prompt)
-        except Exception as exc:
+        except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("_propose_node failed: %s", exc)
             proposals = state["draft_proposals"]  # keep previous draft on failure
 
@@ -762,7 +762,7 @@ class RAGAgent(Agent):
             done = bool(data.get("done", False))
             if not sub_queries:  # defensive: done: false but no queries → treat as done
                 done = True
-        except Exception as exc:
+        except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("_identify_gaps_node failed: %s", exc)
             sub_queries = []
             done = True  # fail safe: don't loop on error
@@ -929,7 +929,7 @@ class RAGAgent(Agent):
             )
             raw = response.choices[0].message.content.strip()
             return parse_json_response(raw)
-        except Exception as exc:
+        except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("assess_feasibility failed for proposal: %s", exc)
             return {
                 "feasible": None,
@@ -974,7 +974,7 @@ class RAGAgent(Agent):
             )
             raw = response.choices[0].message.content.strip()
             contradictions = parse_json_response(raw).get("contradictions", [])
-        except Exception as exc:
+        except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("detect_contradictions pass '%s' failed: %s", query, exc)
             return []
 
@@ -1104,7 +1104,7 @@ class RAGAgent(Agent):
             if not results:
                 return ""
             return results[0].get("abstractText") or results[0].get("title", "")
-        except Exception as exc:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
             logger.warning("_fetch_anchor_abstract failed: %s", exc)
             return ""
 

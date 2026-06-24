@@ -474,7 +474,7 @@ class LiteratureMiningAgent(Agent):
                 if full_text:
                     paper.abstract = full_text[:6000]
             except Exception as exc:
-                logger.debug(
+                logger.warning(
                     "Full text enrichment failed for %s: %s", paper.paper_id, exc
                 )
 
