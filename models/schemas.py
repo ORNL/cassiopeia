@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 
 # ─────────────────────────────────────────────────────
@@ -102,7 +102,7 @@ class SearchQuery:
     # Falls back to base_terms when empty (cross-product / rescue pass queries).
     term_groups: list[list[str]] = field(default_factory=list)
     contextual_modifiers: dict[str, str] = field(default_factory=dict)
-    generated_at: datetime = field(default_factory=datetime.utcnow)
+    generated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
 @dataclass

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -204,7 +204,7 @@ class PaperStore:
             "SELECT rag_indexed, added_at FROM papers WHERE paper_id = ?", (paper.paper_id,)
         ).fetchone()
         rag_indexed = existing["rag_indexed"] if existing else 0
-        added_at = existing["added_at"] if existing else datetime.now().isoformat()
+        added_at = existing["added_at"] if existing else datetime.now(timezone.utc).isoformat()
 
         pub = None
         if paper.published_date:
@@ -309,7 +309,7 @@ class PaperStore:
         """Record the current time as the researcher's last login."""
         self._conn.execute(
             "INSERT OR REPLACE INTO user_logins (researcher_id, last_login) VALUES (?, ?)",
-            (researcher_id, datetime.now().isoformat()),
+            (researcher_id, datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
 
@@ -388,7 +388,7 @@ class PaperStore:
             (
                 session_id,
                 researcher_id,
-                datetime.now().isoformat(),
+                datetime.now(timezone.utc).isoformat(),
                 json.dumps(profile_snap),
                 n_papers,
                 n_proposals,

@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
 from models.schemas import (
@@ -139,7 +139,7 @@ class PaperScorer:
     def _score_recency(self, paper: PaperMetadata) -> float:
         if not paper.published_date:
             return 0.3
-        age_days = (datetime.now() - paper.published_date).days
+        age_days = (datetime.now(timezone.utc).replace(tzinfo=None) - paper.published_date).days
         if age_days < 90:
             return 1.0
         if age_days < 180:
