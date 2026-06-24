@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import os
@@ -15,7 +14,6 @@ from itertools import product as cartesian
 import litellm
 
 from utils.json_utils import parse_json_response
-from utils.mesh_expander import expand_to_mesh, _NCBI_DELAY
 from utils.source_fetchers import SOURCE_REGISTRY
 
 from models.schemas import (
@@ -82,9 +80,6 @@ class QueryGenerator:
     Falls back to ``generate_queries`` on any error.
     """
 
-    def __init__(self, store=None) -> None:
-        self._store = store
-
     OPEN_ACCESS_SOURCES = frozenset(
         src for src, info in SOURCE_REGISTRY.items() if info.access == "open"
     )
@@ -138,7 +133,6 @@ class QueryGenerator:
         synonyms = await self._expand_synonyms(profile)
         queries = self._build_from_synonyms(profile, synonyms, max_queries_per_source)
         if queries:
-            await self._enrich_with_mesh(queries, profile)
             allowed = self._allowed_sources(profile)
             logger.info(
                 "Generated %d queries for %s across %s",
@@ -253,46 +247,6 @@ class QueryGenerator:
             # Stress synonyms first, then profile keywords to widen the OR group
             st_group = [st_str] + extra + [k for k in kws if k not in extra]
         return [sp_group[:3], st_group[:5]]
-
-    async def _enrich_with_mesh(
-        self,
-        queries: list[SearchQuery],
-        profile: ResearcherProfile,
-    ) -> None:
-        """Expand profile terms to MeSH headings and attach to EPMC queries.
-
-        Skips enrichment when no store is available.  Terms are expanded
-        sequentially with a small delay to respect the NCBI 3-req/s limit.
-        arXiv-targeted queries receive no MeSH terms (arXiv does not use MeSH).
-        """
-        if self._store is None:
-            logger.info("MeSH enrichment skipped — no store available (store=%r)", self._store)
-            return
-
-        terms = [*{
-            *profile.plant_species,
-            *(s.value.replace("_", " ") for s in profile.stress_types),
-            *profile.expertise_keywords,
-        }]
-
-        mesh: list[str] = []
-        for term in terms:
-            expanded = await expand_to_mesh(term, self._store)
-            mesh.extend(expanded)
-            await asyncio.sleep(_NCBI_DELAY)
-
-        # Deduplicate preserving order
-        seen: set[str] = set()
-        mesh_terms = [h for h in mesh if not (h in seen or seen.add(h))]  # type: ignore[func-returns-value]
-
-        for q in queries:
-            if q.source_target != SourceType.ARXIV:
-                q.mesh_terms = mesh_terms
-
-        logger.info(
-            "MeSH enrichment for %s: %d headings from %d terms",
-            profile.researcher_id, len(mesh_terms), len(terms),
-        )
 
     def _allowed_sources(self, profile: ResearcherProfile) -> set[SourceType]:
         allowed = {SourceType(s) for s in (profile.source_targets or [])}

@@ -116,12 +116,6 @@ class PaperStore:
             );
             CREATE INDEX IF NOT EXISTS idx_contradictions_researcher
                 ON contradictions (researcher_id, detected_at);
-
-            CREATE TABLE IF NOT EXISTS mesh_cache (
-                term          TEXT PRIMARY KEY,
-                expanded_json TEXT NOT NULL,
-                fetched_at    TEXT NOT NULL
-            );
             """
         )
         self._conn.commit()
@@ -371,30 +365,6 @@ class PaperStore:
         self._conn.execute(
             "INSERT OR REPLACE INTO verify_cache (cache_key, data) VALUES (?, ?)",
             (cache_key, json.dumps(data)),
-        )
-        self._conn.commit()
-
-    # ------------------------------------------------------------------
-    # MeSH cache (Augmentation F) — 30-day TTL
-    # ------------------------------------------------------------------
-
-    def get_mesh_cache(self, term: str) -> list[str] | None:
-        """Return cached MeSH expansion, or None if absent or older than 30 days."""
-        row = self._conn.execute(
-            "SELECT expanded_json, fetched_at FROM mesh_cache WHERE term = ?", (term,)
-        ).fetchone()
-        if not row:
-            return None
-        fetched = datetime.fromisoformat(row["fetched_at"]).replace(tzinfo=None)
-        if (datetime.now(timezone.utc).replace(tzinfo=None) - fetched).days > 30:
-            return None
-        return json.loads(row["expanded_json"])
-
-    def set_mesh_cache(self, term: str, headings: list[str]) -> None:
-        """Persist a MeSH expansion result."""
-        self._conn.execute(
-            "INSERT OR REPLACE INTO mesh_cache (term, expanded_json, fetched_at) VALUES (?, ?, ?)",
-            (term, json.dumps(headings), datetime.now(timezone.utc).isoformat()),
         )
         self._conn.commit()
 
