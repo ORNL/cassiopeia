@@ -107,11 +107,17 @@ class RAGStore:
         )
         hits = []
         for i in range(len(result["ids"][0])):
+            chroma_id = result["ids"][0][i]
+            meta = result["metadatas"][0][i]
+            # Prefer paper_id from metadata (set explicitly since P1#7) so that
+            # when augmentation B switches ChromaDB ids to chunk ids the
+            # paper_id lookup continues to work without changing callers.
+            paper_id = meta.get("paper_id") or chroma_id
             hits.append(
                 {
-                    "paper_id": result["ids"][0][i],
+                    "paper_id": paper_id,
                     "document": result["documents"][0][i],
-                    "metadata": result["metadatas"][0][i],
+                    "metadata": meta,
                     "distance": result["distances"][0][i],
                 }
             )

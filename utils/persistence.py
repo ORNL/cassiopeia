@@ -286,6 +286,7 @@ class PaperStore:
             abstract = d.get("abstract") or ""
             if abstract:
                 meta = {
+                    "paper_id": row["paper_id"],
                     "title": d.get("title", ""),
                     "journal": d.get("journal") or "",
                     "researcher_id": row["researcher_id"],
