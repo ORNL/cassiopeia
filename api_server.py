@@ -20,29 +20,22 @@ from dotenv import load_dotenv
 load_dotenv(Path(_PROJECT_ROOT) / ".env")
 
 import asyncio
-import contextvars
 import logging
 import os
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from typing import Any, Awaitable, TypeVar
-
-T = TypeVar("T")
+from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from academy.exchange import LocalExchangeFactory
 from academy.logging import init_logging
-from academy.manager import Manager
 
-from agents.literature_mining_agent import LiteratureMiningAgent
-from agents.rag_agent import RAGAgent
 from models.schemas import ResearcherProfile, StressType
+from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
@@ -59,7 +52,6 @@ for _noisy in ("LiteLLM", "litellm", "sentence_transformers", "huggingface_hub",
 
 _mining_handle = None
 _rag_handle = None
-_agent_ctx: contextvars.Context | None = None
 _paper_store: PaperStore | None = None
 
 # Per-researcher progress state — updated synchronously by the search handler.
@@ -89,67 +81,17 @@ def _set_progress(
     }
 
 
-def _call(coro: Awaitable[T]) -> asyncio.Future[T]:
-    """Schedule a coroutine inside the agent's exchange context.
-
-    Academy resolves its exchange client via a ContextVar set only inside
-    ``async with manager:``.  FastAPI handlers run in separate tasks, so we
-    capture that context at startup and re-enter it here for every agent call.
-    """
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future[T] = loop.create_future()
-
-    def _schedule() -> None:
-        task = loop.create_task(coro)
-
-        def _done(t: asyncio.Task) -> None:
-            if fut.done():
-                return
-            if t.cancelled():
-                fut.cancel()
-            elif t.exception() is not None:
-                fut.set_exception(t.exception())
-            else:
-                fut.set_result(t.result())
-
-        task.add_done_callback(_done)
-
-    _agent_ctx.run(_schedule)
-    return fut
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _mining_handle, _rag_handle, _agent_ctx, _paper_store
+    global _mining_handle, _rag_handle, _paper_store
 
-    scan_hours = float(os.environ.get("SCAN_INTERVAL_HOURS", "24"))
-    scan_seconds = int(scan_hours * 3600)
-
-    _paper_store = PaperStore(
-        os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
-    )
-
+    scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
+    db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
     app.state.bg_tasks: set[asyncio.Task] = set()
 
-    manager = await Manager.from_exchange_factory(
-        factory=LocalExchangeFactory(),
-        executors=ThreadPoolExecutor(max_workers=6),
-    )
-    async with manager:
-        _mining_handle = await manager.launch(
-            LiteratureMiningAgent,
-            kwargs={"scan_interval_seconds": scan_seconds, "max_papers_per_query": 20},
-        )
-        _rag_handle = await manager.launch(RAGAgent)
-        _agent_ctx = contextvars.copy_context()
-        logger.info(
-            "Agents launched — mining: %s  rag: %s",
-            _mining_handle.agent_id,
-            _rag_handle.agent_id,
-        )
+    async with launch_agents(scan_seconds, db_path) as (mining, rag, store):
+        _mining_handle, _rag_handle, _paper_store = mining, rag, store
         yield
-        await manager.shutdown(_mining_handle, blocking=True)
-        await manager.shutdown(_rag_handle, blocking=True)
 
         # Ask litellm's background LoggingWorker to drain and stop cleanly.
         try:
@@ -169,8 +111,6 @@ async def lifespan(app: FastAPI):
                 t.cancel()
                 t._log_destroy_pending = False  # noqa: SLF001
             await asyncio.gather(*pending, return_exceptions=True)
-
-    _paper_store.close()
 
 
 app = FastAPI(title="APPL Literature Mining API", lifespan=lifespan)
@@ -395,7 +335,7 @@ def _schedule_contradictions(researcher_id: str) -> None:
         task.add_done_callback(_done)
         app.state.bg_tasks.add(task)
 
-    _agent_ctx.run(_bg)
+    run_in_context(_bg)
 
 
 _SPECIES_TERMS: dict[str, list[str]] = {
@@ -574,7 +514,7 @@ async def _rag_synthesis_or_cached(
 
 @app.post("/api/search", responses={503: {"description": "Mining agent not ready"}})
 async def search(req: SearchRequest) -> dict[str, Any]:
-    if _mining_handle is None or _agent_ctx is None:
+    if _mining_handle is None:
         raise HTTPException(status_code=503, detail="Agent not ready")
 
     logger.info(
@@ -733,7 +673,7 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
 @app.get("/api/researcher/{researcher_id}")
 async def get_researcher(researcher_id: str) -> dict | None:
     """Return the stored profile for a researcher, or null if not found."""
-    if _mining_handle is not None and _agent_ctx is not None:
+    if _mining_handle is not None:
         try:
             result = await _call(_mining_handle.get_researcher(researcher_id))
             if result is not None:
@@ -748,7 +688,7 @@ async def get_researcher(researcher_id: str) -> dict | None:
 
 @app.post("/api/anchor_search", responses={503: {"description": "RAG agent not ready"}})
 async def anchor_search(req: AnchorSearchRequest) -> list[dict]:
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         raise HTTPException(status_code=503, detail="RAG agent not ready")
     return await _call(
         _rag_handle.find_similar_to_anchor(
@@ -761,7 +701,7 @@ async def anchor_search(req: AnchorSearchRequest) -> list[dict]:
 
 @app.post("/api/rag/synthesize", responses={503: {"description": "RAG agent not ready"}})
 async def rag_synthesize(req: SynthesizeRequest) -> dict[str, str]:
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         raise HTTPException(status_code=503, detail="RAG agent not ready")
     answer = await _call(_rag_handle.synthesize(req.question, req.researcher_id))
     return {"answer": answer}
@@ -769,14 +709,14 @@ async def rag_synthesize(req: SynthesizeRequest) -> dict[str, str]:
 
 @app.get("/api/rag/status")
 async def rag_status() -> dict[str, Any]:
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         return {"status": "starting"}
     return await _call(_rag_handle.get_rag_status())
 
 
 @app.get("/api/status")
 async def status() -> dict[str, Any]:
-    if _mining_handle is None or _agent_ctx is None:
+    if _mining_handle is None:
         return {"status": "starting"}
     return await _call(_mining_handle.get_agent_status())
 

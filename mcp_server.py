@@ -20,16 +20,13 @@ Or programmatically:
 
 from __future__ import annotations
 
-import asyncio
-import contextvars
 import logging
 import os
 import sys
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Awaitable, TypeVar, Union
+from typing import Any, Union
 
 _PROJECT_ROOT = str(Path(__file__).resolve().parent)
 if _PROJECT_ROOT not in sys.path:
@@ -43,24 +40,18 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
-from academy.exchange import LocalExchangeFactory
 from academy.logging import init_logging
-from academy.manager import Manager
 
-from agents.literature_mining_agent import LiteratureMiningAgent
-from agents.rag_agent import RAGAgent
+from utils.agent_bridge import _call, launch_agents
 from utils.persistence import PaperStore
 
 init_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 # ── Global state (populated in lifespan) ─────────────────────────────────────
 
 _mining_handle = None
 _rag_handle = None
-_agent_ctx: contextvars.Context | None = None
 _paper_store: PaperStore | None = None
 
 
@@ -83,74 +74,19 @@ class ToolResult(BaseModel):
     tool_name: str = ""
 
 
-# ── Academy context bridge ────────────────────────────────────────────────────
-
-
-def _call(coro: Awaitable[T]) -> asyncio.Future[T]:
-    """Schedule a coroutine inside the Academy exchange context.
-
-    Academy resolves its exchange client via a ContextVar that is only set
-    inside ``async with manager:``.  FastMCP tool handlers run in separate
-    tasks, so we capture that context at startup and re-enter it here.
-    """
-    loop = asyncio.get_running_loop()
-    fut: asyncio.Future[T] = loop.create_future()
-
-    def _schedule() -> None:
-        task = loop.create_task(coro)
-
-        def _done(t: asyncio.Task) -> None:
-            if fut.done():
-                return
-            if t.cancelled():
-                fut.cancel()
-            elif t.exception() is not None:
-                fut.set_exception(t.exception())
-            else:
-                fut.set_result(t.result())
-
-        task.add_done_callback(_done)
-
-    _agent_ctx.run(_schedule)
-    return fut
-
-
 # ── Lifespan (start / stop Academy agents) ───────────────────────────────────
 
 
 @asynccontextmanager
 async def _lifespan(app: Any):  # app is the FastMCP ASGI app
-    global _mining_handle, _rag_handle, _agent_ctx, _paper_store
+    global _mining_handle, _rag_handle, _paper_store
 
-    scan_hours = float(os.environ.get("SCAN_INTERVAL_HOURS", "24"))
-    scan_seconds = int(scan_hours * 3600)
+    scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
+    db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
 
-    _paper_store = PaperStore(
-        os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
-    )
-
-    manager = await Manager.from_exchange_factory(
-        factory=LocalExchangeFactory(),
-        executors=ThreadPoolExecutor(max_workers=6),
-    )
-    async with manager:
-        _mining_handle = await manager.launch(
-            LiteratureMiningAgent,
-            kwargs={"scan_interval_seconds": scan_seconds, "max_papers_per_query": 20},
-        )
-        _rag_handle = await manager.launch(RAGAgent)
-        _agent_ctx = contextvars.copy_context()
-        logger.info(
-            "MCP server agents launched — mining: %s  rag: %s",
-            _mining_handle.agent_id,
-            _rag_handle.agent_id,
-        )
+    async with launch_agents(scan_seconds, db_path) as (mining, rag, store):
+        _mining_handle, _rag_handle, _paper_store = mining, rag, store
         yield
-
-        await manager.shutdown(_mining_handle, blocking=True)
-        await manager.shutdown(_rag_handle, blocking=True)
-
-    _paper_store.close()
 
 
 # ── FastMCP server ────────────────────────────────────────────────────────────
@@ -288,7 +224,7 @@ async def search_literature(
         ``key_insights[n]["paper"]`` must be updated to use ``"paper_id"``.
         Branch on ``schema_version >= 2`` to apply this logic safely.
     """
-    if _mining_handle is None or _agent_ctx is None:
+    if _mining_handle is None or _rag_handle is None:
         return _not_ready("search_literature")
 
     equipment = _facility_equipment()
@@ -376,7 +312,7 @@ async def search_literature(
 @mcp.tool()
 async def get_top_papers(researcher_id: str, limit: int = 20) -> str:
     """Return the top scored papers from the last search cycle for a researcher."""
-    if _mining_handle is None or _agent_ctx is None:
+    if _mining_handle is None or _rag_handle is None:
         return _not_ready("get_top_papers")
     papers = await _call(_mining_handle.get_top_papers(researcher_id, limit=limit))
     return ToolResult(
@@ -398,7 +334,7 @@ async def detect_contradictions(
     Returns a ToolResult (code 301) whose ``result`` dict contains a
     ``contradictions`` list of claim pairs with suggested explanations.
     """
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         return _not_ready("detect_contradictions", _RAG_AGENT)
     contradictions = await _call(
         _rag_handle.detect_contradictions(
@@ -426,7 +362,7 @@ async def anchor_search(
     free-text title fragment.  The agent fetches the abstract from Europe PMC
     and uses it as a semantic query seed against ChromaDB.
     """
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         return _not_ready("anchor_search", _RAG_AGENT)
     results = await _call(
         _rag_handle.find_similar_to_anchor(
@@ -450,7 +386,7 @@ async def ask_knowledge_base(
     and synthesise a grounded answer.  Returns a plain-text answer string
     (ToolResult code 201).
     """
-    if _rag_handle is None or _agent_ctx is None:
+    if _rag_handle is None:
         return _not_ready("ask_knowledge_base", _RAG_AGENT)
     answer = await _call(_rag_handle.synthesize(question, researcher_id))
     return ToolResult(
@@ -465,7 +401,7 @@ async def litminer_status() -> str:
     Returns a ToolResult (code 301) whose ``result`` dict has ``mining``
     and ``rag`` sub-objects.  Returns code 503 if agents are not yet ready.
     """
-    if _mining_handle is None or _rag_handle is None or _agent_ctx is None:
+    if _mining_handle is None or _rag_handle is None:
         return _not_ready("litminer_status", "Agents")
     mining_status = await _call(_mining_handle.get_agent_status())
     rag_status = await _call(_rag_handle.get_rag_status())
