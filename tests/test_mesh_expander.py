@@ -23,6 +23,7 @@ _ESEARCH_RESPONSE = {
 
 _EFETCH_XML = """\
 <?xml version="1.0"?>
+<!DOCTYPE DescriptorRecordSet PUBLIC "-//NLM//DTD MeSH 2024//EN" "https://nlm.nih.gov/databases/dtd/nlmmeshdescriptor.dtd">
 <DescriptorRecordSet>
   <DescriptorRecord>
     <DescriptorName><String>Droughts</String></DescriptorName>

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import xml.etree.ElementTree as ET
 from urllib.parse import urlencode
 
@@ -88,7 +89,11 @@ async def _efetch(uid: str, original_term: str) -> list[str]:
                 return [original_term]
             xml_text = await resp.text()
 
-    root = ET.fromstring(xml_text)
+    # Strip the DOCTYPE declaration — NCBI's XML includes an external DTD reference
+    # ("PUBLIC ... url") that Python's expat parser rejects as a security measure,
+    # producing "syntax error: line 2, column 0".
+    xml_clean = re.sub(r"<!DOCTYPE\b[^[>]*(?:\[[^\]]*\])?[^>]*>", "", xml_text, flags=re.DOTALL)
+    root = ET.fromstring(xml_clean.strip())
 
     # Preferred heading from DescriptorName
     descriptor = root.findtext(".//DescriptorName/String") or ""
