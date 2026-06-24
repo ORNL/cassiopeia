@@ -266,6 +266,7 @@ class QueryGenerator:
         arXiv-targeted queries receive no MeSH terms (arXiv does not use MeSH).
         """
         if self._store is None:
+            logger.info("MeSH enrichment skipped — no store available (store=%r)", self._store)
             return
 
         terms = [*{
@@ -288,8 +289,8 @@ class QueryGenerator:
             if q.source_target != SourceType.ARXIV:
                 q.mesh_terms = mesh_terms
 
-        logger.debug(
-            "MeSH enrichment for %s: %d headings across %d terms",
+        logger.info(
+            "MeSH enrichment for %s: %d headings from %d terms",
             profile.researcher_id, len(mesh_terms), len(terms),
         )
 

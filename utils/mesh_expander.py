@@ -43,8 +43,8 @@ async def expand_to_mesh(term: str, store=None) -> list[str]:
 
     try:
         headings = await _ncbi_lookup(term)
-    except (aiohttp.ClientError, asyncio.TimeoutError, ET.ParseError) as exc:
-        logger.debug("MeSH lookup failed for %r: %s", term, exc)
+    except Exception as exc:
+        logger.warning("MeSH lookup failed for %r: %s — using bare term", term, exc)
         return [term]
 
     if store is not None:
