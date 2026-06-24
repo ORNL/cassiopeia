@@ -236,8 +236,8 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
         <div style={S.pExp}>
           <div style={S.sGrid}>
             {[["Species", paper.scores.species_match], ["Stress", paper.scores.stress_match],
-              ["Method", paper.scores.method_match], ["Recency", paper.scores.recency],
-              ["Credibility", paper.scores.credibility], ["Novelty", paper.scores.novelty],
+              ["Method", paper.scores.method_match], ["Credibility", paper.scores.credibility],
+              ["Novelty", paper.scores.novelty],
             ].map(([l, v]) => (
               <div key={l} style={S.sRow}>
                 <span style={S.sLbl}>{l}</span>
@@ -1040,7 +1040,6 @@ const contKey = (c) => [...c.papers].sort((a, b) => a.localeCompare(b)).join("|"
 
 const SORT_OPTIONS = [
   { key: "overall",           label: "Profile Score", title: "Weighted combination of relevance, novelty, method fit and credibility — weights set in Priority Settings" },
-  { key: "recency",           label: "Published",     title: "How recently the paper was published (publication date)" },
   { key: "added_at",          label: "Fetched",       title: "How recently the paper was added to your library" },
   { key: "novelty",           label: "Novelty",       title: "How novel the paper's approach is relative to your knowledge base" },
   { key: "method_match",      label: "Method Fit",    title: "How well the paper's methods match your available instruments" },
@@ -1058,8 +1057,6 @@ function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newP
   return [...result].sort((a, b) => {
     if (sortKey === "credibility_level")
       return (CRED_ORDER[b.credibility_level] ?? 0) - (CRED_ORDER[a.credibility_level] ?? 0);
-    if (sortKey === "recency")
-      return (b.published || "").localeCompare(a.published || "");
     if (sortKey === "added_at")
       return (b.added_at || "").localeCompare(a.added_at || "");
     return (b.scores[sortKey] ?? 0) - (a.scores[sortKey] ?? 0);
