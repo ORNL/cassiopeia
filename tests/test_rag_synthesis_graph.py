@@ -10,6 +10,7 @@ import os
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import litellm
 import pytest
 
 
@@ -50,6 +51,7 @@ def _make_state(**overrides) -> dict:
         "liked_proposals": [],
         "researcher_id": "r1",
         "max_iterations": 3,
+        "n_proposals": 5,
     }
     return {**base, **overrides}
 
@@ -131,7 +133,8 @@ async def test_propose_node_keeps_previous_draft_on_llm_failure():
     prev_proposals = [_fake_proposal()]
     state = _make_state(iteration=1, draft_proposals=prev_proposals)
 
-    with patch.object(agent, "_llm_proposals", new=AsyncMock(side_effect=RuntimeError("timeout"))):
+    api_err = litellm.APIError(status_code=500, message="timeout", llm_provider="mock", model="mock")
+    with patch.object(agent, "_llm_proposals", new=AsyncMock(side_effect=api_err)):
         result = await agent._propose_node(state)
 
     assert result["draft_proposals"] == prev_proposals
@@ -213,7 +216,8 @@ async def test_identify_gaps_fails_safe_on_llm_error():
     agent = _make_agent()
     state = _make_state(draft_proposals=[_fake_proposal()])
 
-    with patch("litellm.acompletion", new=AsyncMock(side_effect=RuntimeError("network error"))):
+    api_err = litellm.APIError(status_code=500, message="network error", llm_provider="mock", model="mock")
+    with patch("litellm.acompletion", new=AsyncMock(side_effect=api_err)):
         result = await agent._identify_gaps_node(state)
 
     assert result["done"] is True
