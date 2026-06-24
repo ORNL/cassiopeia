@@ -384,8 +384,15 @@ async def get_top_papers(researcher_id: str, limit: int = 20) -> str:
 
 
 @mcp.tool()
-async def detect_contradictions(researcher_id: str, n_papers: int = 10) -> str:
+async def detect_contradictions(
+    researcher_id: str,
+    n_papers_per_pass: int = 20,
+    n_passes: int = 3,
+) -> str:
     """Scan indexed abstracts for conflicting claims across papers.
+
+    Runs ``n_passes`` LLM calls over different semantic slices of
+    ``n_papers_per_pass`` abstracts each, then deduplicates results.
 
     Returns a ToolResult (code 301) whose ``result`` dict contains a
     ``contradictions`` list of claim pairs with suggested explanations.
@@ -393,7 +400,11 @@ async def detect_contradictions(researcher_id: str, n_papers: int = 10) -> str:
     if _rag_handle is None or _agent_ctx is None:
         return _not_ready("detect_contradictions", _RAG_AGENT)
     contradictions = await _call(
-        _rag_handle.detect_contradictions(researcher_id, n_papers=n_papers)
+        _rag_handle.detect_contradictions(
+            researcher_id,
+            n_papers_per_pass=n_papers_per_pass,
+            n_passes=n_passes,
+        )
     )
     return ToolResult(
         code=301,
