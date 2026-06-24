@@ -21,7 +21,7 @@ export default function LandingPage({ onLogin, pending }) {
         <img src={logo} alt="Cassiopeia" style={S.logo} />
         <h1 style={S.title}>Find the papers that {"\n"}<br/> matter to your research</h1>
         <p style={S.sub}>
-          An Opal service
+          An OPAL service
         </p>
       </div>
 
@@ -73,7 +73,7 @@ const S = {
     marginBottom: 40,
   },
   logo: {
-    height: 300,
+    height: 420,
     width: "auto",
     marginBottom: 24,
   },
