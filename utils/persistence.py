@@ -146,7 +146,6 @@ class PaperStore:
             "stress_types": [s.value for s in profile.stress_types],
             "phenotyping_methods": [m.value for m in profile.phenotyping_methods],
             "expertise_keywords": profile.expertise_keywords,
-            "methodology_preferences": profile.methodology_preferences,
             "priority_novelty": profile.priority_novelty,
             "priority_relevance": profile.priority_relevance,
             "priority_methodology": profile.priority_methodology,
@@ -183,7 +182,6 @@ class PaperStore:
                         PhenotypingMethod(m) for m in d.get("phenotyping_methods", [])
                     ],
                     expertise_keywords=d.get("expertise_keywords", []),
-                    methodology_preferences=d.get("methodology_preferences", []),
                     priority_novelty=d.get("priority_novelty", 0.5),
                     priority_relevance=d.get("priority_relevance", 0.5),
                     priority_methodology=d.get("priority_methodology", 0.5),
@@ -237,7 +235,6 @@ class PaperStore:
             "credibility": scored.credibility.value,
             "suggested_combinations": scored.suggested_combinations,
             "source_queries": scored.source_queries,
-            "appl_feasibility_notes": scored.appl_feasibility_notes,
         }
         self._conn.execute(
             """INSERT OR REPLACE INTO papers
@@ -556,5 +553,4 @@ def _row_to_scored(d: dict) -> ScoredPaper:
         credibility=cred,
         suggested_combinations=d.get("suggested_combinations", []),
         source_queries=d.get("source_queries", []),
-        appl_feasibility_notes=d.get("appl_feasibility_notes", ""),
     )

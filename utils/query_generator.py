@@ -262,7 +262,4 @@ class QueryGenerator:
     def _build_modifiers(self, profile: ResearcherProfile) -> dict[str, str]:
         now = datetime.now(timezone.utc)
         year_start = now.year - (profile.time_range_months // 12)
-        modifiers: dict[str, str] = {"temporal": f"{year_start}..{now.year}"}
-        if profile.expertise_keywords:
-            modifiers["expertise"] = _AND.join(profile.expertise_keywords[:3])
-        return modifiers
+        return {"temporal": f"{year_start}..{now.year}"}

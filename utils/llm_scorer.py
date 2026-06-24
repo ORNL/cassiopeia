@@ -91,9 +91,6 @@ class LLMPaperScorer:
     identical except that score_paper is a coroutine.
     """
 
-    HIGH_IMPACT_JOURNALS = PaperScorer.HIGH_IMPACT_JOURNALS
-    MID_IMPACT_JOURNALS = PaperScorer.MID_IMPACT_JOURNALS
-
     def __init__(self) -> None:
         self._model = os.environ["LLM_SCORING_MODEL"]
         self._enabled = (

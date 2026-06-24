@@ -143,9 +143,6 @@ class LiteratureMiningAgent(Agent):
         self.state.researcher_profiles[researcher_id] = profile
         self.store.save_profile(profile)
 
-        queries = self.query_gen.generate_queries(profile)
-        self.state.pending_queries.extend(queries)
-
         logger.info(
             "Registered researcher %s (%s) — %d queries generated",
             researcher_id,
@@ -326,7 +323,6 @@ class LiteratureMiningAgent(Agent):
             "status": "running",
             "researchers_registered": len(self.state.researcher_profiles),
             "total_papers_scored": len(self.state.scored_papers),
-            "pending_queries": len(self.state.pending_queries),
             "queries_executed": len(self.state.query_history),
             "last_scan_times": {
                 k: v.isoformat()

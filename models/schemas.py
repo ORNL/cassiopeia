@@ -8,8 +8,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
-
 
 # ─────────────────────────────────────────────────────
 # Enums
@@ -74,17 +72,12 @@ class ResearcherProfile:
     stress_types: list[StressType] = field(default_factory=list)
     phenotyping_methods: list[PhenotypingMethod] = field(default_factory=list)
     expertise_keywords: list[str] = field(default_factory=list)
-    methodology_preferences: list[str] = field(default_factory=list)
 
     # Priority weights (0.0–1.0) for ranking results
     priority_novelty: float = 0.5
     priority_relevance: float = 0.5
     priority_methodology: float = 0.5
     priority_reproducibility: float = 0.5
-
-    # Timeline constraints
-    experiment_start: datetime | None = None
-    experiment_end: datetime | None = None
 
     # Facility constraints
     available_equipment: list[str] = field(default_factory=list)
@@ -167,7 +160,6 @@ class ScoredPaper:
     relevance: RelevanceScore
     credibility: CredibilityLevel = CredibilityLevel.PRELIMINARY
     suggested_combinations: list[str] = field(default_factory=list)
-    appl_feasibility_notes: str = ""
     source_queries: list[str] = field(default_factory=list)
 
 
@@ -182,8 +174,6 @@ class AgentState:
     researcher_profiles: dict[str, ResearcherProfile] = field(
         default_factory=dict,
     )
-    pending_queries: list[SearchQuery] = field(default_factory=list)
     scored_papers: list[ScoredPaper] = field(default_factory=list)
     query_history: list[SearchQuery] = field(default_factory=list)
     last_scan_time: dict[str, datetime] = field(default_factory=dict)
-    knowledge_base_stats: dict[str, Any] = field(default_factory=dict)
