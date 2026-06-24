@@ -200,75 +200,14 @@ class LiteratureMiningAgent(Agent):
         if profile is None:
             return {"error": f"Unknown researcher: {researcher_id}"}
 
-        queries = await self.query_gen.generate_queries_async(profile)
-        papers_found = 0
-
-        known_dois = self.store.known_dois(researcher_id)
-        known_ids  = self.store.known_paper_ids(researcher_id)
-        snapshot = list(self.state.scored_papers)
-        pairs = self._collect_new_pairs(
-            researcher_id, await self._fetch_all(queries), known_dois, known_ids
+        result = await self._run_scan(
+            researcher_id,
+            profile,
+            log_progress=True,
+            record_query_history=True,
         )
-
-        # Rescue pass: if every LLM query returned 0, retry with simple 2-term
-        # cross-product queries (species × stress) that are broad enough to always
-        # hit something.  Logs clearly so the rescue is visible.
-        if not pairs:
-            logger.warning(
-                "All %d LLM queries returned 0 new papers for %s — "
-                "rescue pass with broad fallback queries",
-                len(queries), researcher_id,
-            )
-            fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
-            pairs = self._collect_new_pairs(
-                researcher_id, await self._fetch_all(fallback), known_dois, known_ids
-            )
-            if pairs:
-                logger.info("Rescue pass recovered %d new papers for %s", len(pairs), researcher_id)
-            else:
-                logger.warning(
-                    "Rescue pass also returned 0 for %s — sources have no matching papers", researcher_id
-                )
-
-        await self._enrich_abstracts(pairs)
-        logger.info("Fetched %d papers across %d queries — scoring…", len(pairs), len(queries))
-
-        # Score papers with bounded concurrency so Azure keep-alive connections
-        # are reused rather than opening many new sockets simultaneously.
-        _sem = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "3")))
-        _scored_count = 0
-
-        async def _score(q: SearchQuery, p: PaperMetadata) -> ScoredPaper:
-            nonlocal _scored_count
-            async with _sem:
-                scored = await self.scorer.score_paper(p, profile, snapshot)
-            scored.source_queries.append(q.query_string)
-            _scored_count += 1
-            if _scored_count % 10 == 0 or _scored_count == len(pairs):
-                logger.info("Scored %d / %d papers", _scored_count, len(pairs))
-            return scored
-
-        score_results = await asyncio.gather(
-            *(_score(q, p) for q, p in pairs),
-            return_exceptions=True,
-        )
-        for scored in score_results:
-            if not isinstance(scored, BaseException):
-                self.state.scored_papers.append(scored)
-                self.store.save_paper(scored, researcher_id)
-                papers_found += 1
-
-        logger.info("Saving LLM cache…")
-        self.store.save_llm_cache(self.scorer.export_cache())
-        self.state.query_history.extend(queries)
-        logger.info("trigger_search complete — %d papers found", papers_found)
-
-        return {
-            "status": "completed",
-            "queries_executed": len(queries),
-            "papers_found": papers_found,
-            "total_papers": len(self.state.scored_papers),
-        }
+        logger.info("trigger_search complete — %d papers found", result["papers_found"])
+        return {"status": "completed", **result}
 
     @action
     async def get_top_papers(
@@ -420,45 +359,96 @@ class LiteratureMiningAgent(Agent):
         self, rid: str, profile: ResearcherProfile
     ) -> None:
         """Fetch and score new papers for one researcher."""
+        await self._run_scan(rid, profile, update_last_scan=True)
+
+    async def _run_scan(
+        self,
+        researcher_id: str,
+        profile: ResearcherProfile,
+        *,
+        log_progress: bool = False,
+        record_query_history: bool = False,
+        update_last_scan: bool = False,
+    ) -> dict[str, Any]:
+        """Core scan pipeline shared by trigger_search and _scan_researcher.
+
+        Generates queries, deduplicates against the store, enriches abstracts,
+        scores with bounded concurrency, saves results, and optionally records
+        query history or updates last_scan_time.
+        """
+        # Score papers with bounded concurrency so Azure keep-alive connections
+        # are reused rather than opening many new sockets simultaneously.
         queries = await self.query_gen.generate_queries_async(
             profile, max_queries_per_source=3
         )
 
-        known_dois = self.store.known_dois(rid)
-        known_ids  = self.store.known_paper_ids(rid)
+        known_dois = self.store.known_dois(researcher_id)
+        known_ids  = self.store.known_paper_ids(researcher_id)
         snapshot = list(self.state.scored_papers)
-        pairs = self._collect_new_pairs(rid, await self._fetch_all(queries), known_dois, known_ids)
+        pairs = self._collect_new_pairs(
+            researcher_id, await self._fetch_all(queries), known_dois, known_ids
+        )
 
         if not pairs:
             logger.warning(
                 "All %d LLM queries returned 0 new papers for %s — rescue pass",
-                len(queries), rid,
+                len(queries), researcher_id,
             )
             fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
-            pairs = self._collect_new_pairs(rid, await self._fetch_all(fallback), known_dois, known_ids)
+            pairs = self._collect_new_pairs(
+                researcher_id, await self._fetch_all(fallback), known_dois, known_ids
+            )
             if pairs:
-                logger.info("Rescue pass recovered %d new papers for %s", len(pairs), rid)
+                logger.info("Rescue pass recovered %d new papers for %s", len(pairs), researcher_id)
+            elif log_progress:
+                logger.warning(
+                    "Rescue pass also returned 0 for %s — sources have no matching papers",
+                    researcher_id,
+                )
 
         await self._enrich_abstracts(pairs)
+        if log_progress:
+            logger.info(
+                "Fetched %d papers across %d queries — scoring…", len(pairs), len(queries)
+            )
 
         _sem = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "3")))
+        _scored_count = 0
 
         async def _score(q: SearchQuery, p: PaperMetadata) -> ScoredPaper:
+            nonlocal _scored_count
             async with _sem:
                 scored = await self.scorer.score_paper(p, profile, snapshot)
             scored.source_queries.append(q.query_string)
+            if log_progress:
+                _scored_count += 1
+                if _scored_count % 10 == 0 or _scored_count == len(pairs):
+                    logger.info("Scored %d / %d papers", _scored_count, len(pairs))
             return scored
 
         score_results = await asyncio.gather(
             *(_score(q, p) for q, p in pairs), return_exceptions=True
         )
+        papers_found = 0
         for scored in score_results:
             if not isinstance(scored, BaseException):
                 self.state.scored_papers.append(scored)
-                self.store.save_paper(scored, rid)
+                self.store.save_paper(scored, researcher_id)
+                papers_found += 1
 
+        logger.info("Saving LLM cache…")
         self.store.save_llm_cache(self.scorer.export_cache())
-        self.state.last_scan_time[rid] = datetime.now(timezone.utc)
+
+        if record_query_history:
+            self.state.query_history.extend(queries)
+        if update_last_scan:
+            self.state.last_scan_time[researcher_id] = datetime.now(timezone.utc)
+
+        return {
+            "queries_executed": len(queries),
+            "papers_found": papers_found,
+            "total_papers": len(self.state.scored_papers),
+        }
 
     async def _fetch_all(self, queries: list[SearchQuery]) -> list:
         """Run all queries in parallel, returning raw gather results."""
