@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 import litellm
 
@@ -56,7 +55,7 @@ _MAX_RETRIES = 2
 async def verify_claim(
     paper_text: str,
     insight: str,
-    model: str | None = None,
+    llm_kwargs: dict,
 ) -> dict:
     """Check whether insight is supported by paper_text.
 
@@ -64,14 +63,13 @@ async def verify_claim(
     On persistent failure: supported=None, confidence=None, reason="verification_failed".
     Retries up to _MAX_RETRIES times on JSON parse failures; stops early on LLM errors.
     """
-    _model = model or os.environ["LLM_SCORING_MODEL"]
     prompt = _VERIFY_PROMPT.format(paper_text=paper_text[:6000], insight=insight)
 
     last_exc: Exception | None = None
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = await litellm.acompletion(
-                model=_model,
+                **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=200,
                 response_format={"type": "json_object"},

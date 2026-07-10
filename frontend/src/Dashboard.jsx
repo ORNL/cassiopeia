@@ -1316,7 +1316,7 @@ ProgressModal.propTypes = {
 // Main Dashboard
 // ─────────────────────────────────────────────────
 
-export default function Dashboard({ onBack, researcherName, researcherId, priorities, scanSettings, onOpenSettings }) {
+export default function Dashboard({ onBack, researcherName, researcherId, priorities, scanSettings, onOpenSettings, onOpenLLMSettings }) {
   const [species, setSpecies] = useState([]);
   const [stresses, setStresses] = useState([]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
@@ -1500,6 +1500,9 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
               </span>
             )}
             <button style={S.cogBtn} onClick={onOpenSettings} title="Priority settings">⚙</button>
+            {onOpenLLMSettings && (
+              <button style={S.cogBtn} onClick={onOpenLLMSettings} title="LLM provider settings">🔑</button>
+            )}
             <div style={S.hStatus}>
               <div style={{ ...S.hDot, background: isAgentReady ? "#4ade80" : "#f59e0b", boxShadow: isAgentReady ? "0 0 8px #4ade8066" : "0 0 8px #f59e0b66" }} />
               <span style={S.hTxt}>{statusText}</span>
@@ -1820,4 +1823,5 @@ Dashboard.propTypes = {
   }).isRequired,
   scanSettings: PropTypes.object.isRequired,
   onOpenSettings: PropTypes.func.isRequired,
+  onOpenLLMSettings: PropTypes.func,
 };

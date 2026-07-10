@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 
 import litellm
 
@@ -133,9 +132,9 @@ async def critique_proposal(
     proposal: dict,
     similar_papers: list[dict],
     instruments: list[str],
-    model: str | None = None,
+    llm_kwargs: dict,
 ) -> dict | None:
-    """Critique a single experiment proposal using a LLM_SCORING_MODEL call.
+    """Critique a single experiment proposal.
 
     Makes one LLM call per proposal; returns a critique dict on success or
     None on persistent failure. Augmentation D depends on Augmentation A
@@ -144,22 +143,13 @@ async def critique_proposal(
 
     Args:
         proposal: Proposal dict as returned by synthesize_combinations (v2+).
-            Must have keys: theme, suggestion, rationale, key_insights,
-            verification.
-        similar_papers: List of semantically similar paper dicts from RAG
-            (for novelty assessment). Each may have title/paper_id and
-            document/abstract_snippet keys.
-        instruments: Flat list of instrument names available at the facility.
-        model: Override the LiteLLM model string. Defaults to LLM_CHAT_MODEL env var.
+        similar_papers: Semantically similar paper dicts for novelty assessment.
+        instruments: Available facility instruments.
+        llm_kwargs: LiteLLM kwargs dict from LLMConfig.for_reasoning().
 
     Returns:
-        Critique dict with keys: novelty, confounds, evidence_strength,
-        feasibility_concerns, overall_recommendation, summary. Returns None
-        if all retry attempts fail so the caller can omit the critique field.
+        Critique dict or None on persistent failure.
     """
-    _model = model or os.environ["LLM_CHAT_MODEL"]
-
-
     theme = proposal.get("theme", "")
     suggestion = proposal.get("suggestion", "")
     rationale = proposal.get("rationale", "")
@@ -186,7 +176,7 @@ async def critique_proposal(
     for attempt in range(_MAX_RETRIES + 1):
         try:
             response = await litellm.acompletion(
-                model=_model,
+                **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1500,
                 response_format={"type": "json_object"},

@@ -42,7 +42,7 @@ load_dotenv(Path(__file__).parent / ".env")
 litellm.suppress_debug_info = True
 litellm.drop_params = True
 
-_MODEL = os.environ["LLM_CHAT_MODEL"]
+_MODEL = os.environ.get("LLM_CHAT_MODEL", "anthropic/claude-haiku-4-5-20251001")
 _API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
 _DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5173")
 

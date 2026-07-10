@@ -13,6 +13,7 @@ services:
     environment:
       DB_PATH: /app/data/cassiopeia.db
       RAG_PERSIST_DIR: /app/data/chroma_db
+      CASSIOPEIA_SETTINGS_DB: /app/data/user_settings.db
       DISABLE_SSL_VERIFY: "true"
     volumes:
       - cassiopeia_data:/app/data

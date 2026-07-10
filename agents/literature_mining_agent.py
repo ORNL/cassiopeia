@@ -39,6 +39,7 @@ from utils.llm_scorer import LLMPaperScorer
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
 from utils.source_fetchers import get_fetcher, FETCHER_REGISTRY
+from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -410,13 +411,18 @@ class LiteratureMiningAgent(Agent):
                 "Fetched %d papers across %d queries — scoring…", len(pairs), len(queries)
             )
 
+        try:
+            llm_scoring_kwargs: dict | None = get_llm_config(researcher_id).for_scoring()
+        except LLMNotConfiguredError:
+            llm_scoring_kwargs = None
+
         _sem = asyncio.Semaphore(int(os.environ.get("LLM_CONCURRENCY", "3")))
         _scored_count = 0
 
         async def _score(q: SearchQuery, p: PaperMetadata) -> ScoredPaper:
             nonlocal _scored_count
             async with _sem:
-                scored = await self.scorer.score_paper(p, profile, snapshot)
+                scored = await self.scorer.score_paper(p, profile, snapshot, llm_scoring_kwargs)
             scored.source_queries.append(q.query_string)
             if log_progress:
                 _scored_count += 1

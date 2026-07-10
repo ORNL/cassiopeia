@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +13,9 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_MOCK_LLM = {"model": "test/mock-model"}
+
 
 def _make_agent():
     """Return a RAGAgent with stubbed store and RAG store."""
@@ -25,7 +27,6 @@ def _make_agent():
     agent._store.set_verify_cache.return_value = None
     agent._store.get_paper_metadata.return_value = {"title": "Test Paper"}
     agent._rag = MagicMock()
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
     return agent
 
 
@@ -68,7 +69,7 @@ async def test_flagging_rule(results, expected_flagged):
             for ki, vr in zip(insights, verify_returns)
         ]),
     ):
-        v = await agent._verify_proposal_claims(proposal, paper_text_by_id)
+        v = await agent._verify_proposal_claims(proposal, paper_text_by_id, _MOCK_LLM)
 
     assert v["flagged"] == expected_flagged
     assert v["supported"] == sum(1 for r in results if r is True)
@@ -95,7 +96,7 @@ async def test_nulls_excluded_from_flagging_ratio():
         "agents.rag_agent.RAGAgent._verify_one_claim",
         new=AsyncMock(side_effect=detail_returns),
     ):
-        v = await agent._verify_proposal_claims(proposal, paper_text_by_id)
+        v = await agent._verify_proposal_claims(proposal, paper_text_by_id, _MOCK_LLM)
 
     assert v["checked_claims"] == 1   # null excluded
     assert v["supported"] == 1
@@ -106,7 +107,7 @@ async def test_nulls_excluded_from_flagging_ratio():
 @pytest.mark.asyncio
 async def test_empty_key_insights():
     agent = _make_agent()
-    v = await agent._verify_proposal_claims({"key_insights": []}, {})
+    v = await agent._verify_proposal_claims({"key_insights": []}, {}, _MOCK_LLM)
     assert v["checked_claims"] == 0
     assert v["flagged"] is False
     assert v["details"] == []
@@ -124,7 +125,7 @@ async def test_verify_one_claim_cache_hit():
     agent._store.get_verify_cache.return_value = cached
 
     with patch("utils.llm_verifier.verify_claim", new=AsyncMock()) as mock_llm:
-        result = await agent._verify_one_claim("p1", "some insight", "abstract text")
+        result = await agent._verify_one_claim("p1", "some insight", "abstract text", _MOCK_LLM)
 
     mock_llm.assert_not_called()
     assert result["supported"] is True
@@ -140,7 +141,7 @@ async def test_verify_one_claim_cache_miss_stores_result():
     llm_result = {"supported": False, "confidence": 0.75, "reason": "weak claim"}
 
     with patch("utils.llm_verifier.verify_claim", new=AsyncMock(return_value=llm_result)):
-        result = await agent._verify_one_claim("p1", "some insight", "abstract text")
+        result = await agent._verify_one_claim("p1", "some insight", "abstract text", _MOCK_LLM)
 
     agent._store.set_verify_cache.assert_called_once()
     assert result["supported"] is False
@@ -166,7 +167,10 @@ async def test_synthesize_combinations_has_verification_field():
     agent._rag.query.return_value = [
         {"paper_id": "abc123", "document": "Abstract text.", "distance": 0.5}
     ]
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
+
+    mock_config = MagicMock()
+    mock_config.for_scoring.return_value = _MOCK_LLM
+    mock_config.for_reasoning.return_value = _MOCK_LLM
 
     fake_proposal = {
         "theme": "test theme",
@@ -179,6 +183,7 @@ async def test_synthesize_combinations_has_verification_field():
     llm_verify_result = {"supported": True, "confidence": 0.9, "reason": "Matches."}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=mock_config),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_llm_proposals", new=AsyncMock(return_value=[fake_proposal])),
         patch.object(agent, "_check_novelty", new=AsyncMock(return_value=(True, ""))),
@@ -189,6 +194,7 @@ async def test_synthesize_combinations_has_verification_field():
             species=["poplar"],
             stresses=["drought"],
             methods=["hyperspectral_imaging"],
+            max_iterations=0,
         )
 
     assert len(results) == 1

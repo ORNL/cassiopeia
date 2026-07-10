@@ -27,19 +27,22 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from academy.logging import init_logging
 
+from api.settings import router as settings_router
 from models.schemas import ResearcherProfile, StressType
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
 from utils.source_fetchers import SOURCE_REGISTRY
+from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 init_logging(logging.INFO)
 logger = logging.getLogger(__name__)
@@ -122,6 +125,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(settings_router)
+
+
+@app.exception_handler(LLMNotConfiguredError)
+async def llm_not_configured_handler(request: Request, exc: LLMNotConfiguredError) -> JSONResponse:
+    return JSONResponse(
+        status_code=412,
+        content={"detail": "LLM not configured. Please set up a provider in Settings."},
+    )
+
 
 class SearchRequest(BaseModel):
     researcher_id: str = "researcher_001"
@@ -162,6 +175,7 @@ class AnchorSearchRequest(BaseModel):
 
 class KeywordExtractRequest(BaseModel):
     text: str
+    researcher_id: str
 
 
 class PreviewQueriesRequest(BaseModel):
@@ -187,11 +201,14 @@ async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
     """Extract search-relevant keywords from a free-text research description."""
     if not req.text.strip():
         return {"keywords": []}
-    model = os.environ["LLM_CHAT_MODEL"]
+    try:
+        llm_kwargs = get_llm_config(req.researcher_id).for_reasoning()
+    except LLMNotConfiguredError:
+        return {"keywords": []}
     try:
         import litellm, json as _json
         response = await litellm.acompletion(
-            model=model,
+            **llm_kwargs,
             messages=[{"role": "user", "content": _KEYWORD_EXTRACT_PROMPT.format(text=req.text[:1500])}],
             max_tokens=120,
             response_format={"type": "json_object"},
@@ -308,6 +325,7 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposa
                 _rag_handle.assess_feasibility(
                     proposals=rag_combos,
                     available_equipment=equipment,
+                    researcher_id=req.researcher_id,
                 )
             )
         logger.info(

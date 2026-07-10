@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,6 +16,16 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_MOCK_LLM = {"model": "test/mock-model"}
+
+
+def _make_mock_config():
+    config = MagicMock()
+    config.for_scoring.return_value = _MOCK_LLM
+    config.for_reasoning.return_value = _MOCK_LLM
+    return config
+
 
 def _make_agent():
     """Return a RAGAgent with stubbed store and RAG store."""
@@ -29,7 +38,6 @@ def _make_agent():
     agent._store.set_verify_cache.return_value = None
     agent._rag = MagicMock()
     agent._rag.query.return_value = []
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
     return agent
 
 
@@ -52,6 +60,8 @@ def _make_state(**overrides) -> dict:
         "researcher_id": "r1",
         "max_iterations": 3,
         "n_proposals": 5,
+        "llm_s": _MOCK_LLM,
+        "llm_r": _MOCK_LLM,
     }
     return {**base, **overrides}
 
@@ -346,6 +356,8 @@ async def test_graph_terminates_on_done_true_after_one_iteration():
             liked_proposals=[],
             researcher_id="r1",
             max_iterations=3,
+            llm_s=_MOCK_LLM,
+            llm_r=_MOCK_LLM,
         )
 
     assert final["draft_proposals"] == proposals
@@ -393,6 +405,8 @@ async def test_graph_terminates_on_max_iterations_cap():
             liked_proposals=[],
             researcher_id="r1",
             max_iterations=2,
+            llm_s=_MOCK_LLM,
+            llm_r=_MOCK_LLM,
         )
 
     # With max_iterations=2:
@@ -438,6 +452,8 @@ async def test_graph_terminates_on_zero_new_papers_from_retrieve():
             liked_proposals=[],
             researcher_id="r1",
             max_iterations=3,
+            llm_s=_MOCK_LLM,
+            llm_r=_MOCK_LLM,
         )
 
     assert propose_call_count == 1
@@ -459,6 +475,7 @@ async def test_max_iterations_zero_skips_run_synthesis_graph():
     llm_verify = {"supported": True, "confidence": 0.9, "reason": "ok"}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_llm_proposals", new=AsyncMock(return_value=[_fake_proposal()])),
         patch.object(agent, "_run_synthesis_graph", new=mock_graph),
@@ -487,6 +504,7 @@ async def test_max_iterations_zero_produces_enriched_proposals():
     llm_verify = {"supported": True, "confidence": 0.9, "reason": "ok"}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_llm_proposals", new=AsyncMock(return_value=[_fake_proposal()])),
         patch.object(agent, "_check_novelty", new=AsyncMock(return_value=(True, ""))),
@@ -502,7 +520,7 @@ async def test_max_iterations_zero_produces_enriched_proposals():
         )
 
     assert len(result) == 1
-    assert result[0]["schema_version"] == 3
+    assert result[0]["schema_version"] == 4
     assert "verification" in result[0]
     assert "critique" not in result[0]
     assert result[0]["suggestion"] == _fake_proposal()["suggestion"]
@@ -562,6 +580,7 @@ async def test_integration_final_proposals_reference_both_initial_and_additional
     llm_verify = {"supported": True, "confidence": 0.9, "reason": "ok"}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_propose_node", new=_mock_propose),
         patch.object(agent, "_identify_gaps_node", new=_mock_identify_gaps),
@@ -602,6 +621,7 @@ async def test_integration_verification_attached_on_iterative_path():
     llm_verify = {"supported": True, "confidence": 0.9, "reason": "ok"}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_propose_node", new=_mock_propose),
         patch.object(agent, "_identify_gaps_node", new=_mock_identify_gaps),
@@ -644,6 +664,7 @@ async def test_integration_critique_attached_on_iterative_path_when_requested():
     llm_verify = {"supported": True, "confidence": 0.9, "reason": "ok"}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_propose_node", new=_mock_propose),
         patch.object(agent, "_identify_gaps_node", new=_mock_identify_gaps),

@@ -33,8 +33,8 @@ if errorlevel 1 (
 
 echo.
 echo Cassiopeia is starting...
-echo   Chat      -^> http://localhost:8001
 echo   Dashboard -^> http://localhost:5173
+echo   API       -^> http://localhost:8000
 echo.
 echo Opening dashboard in browser (waiting for services to be ready)...
 timeout /t 20 /nobreak > nul

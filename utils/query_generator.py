@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import datetime, timezone
 from itertools import product as cartesian
 
@@ -15,6 +14,7 @@ import litellm
 
 from utils.json_utils import parse_json_response
 from utils.source_fetchers import SOURCE_REGISTRY
+from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 from models.schemas import (
     ResearcherProfile,
@@ -151,14 +151,17 @@ class QueryGenerator:
 
     async def _expand_synonyms(self, profile: ResearcherProfile) -> dict:
         """Call the LLM to get a synonym map. Returns empty dicts on failure."""
-        model = os.environ["LLM_SCORING_MODEL"]
+        try:
+            llm_kwargs = get_llm_config(profile.researcher_id).for_scoring()
+        except LLMNotConfiguredError:
+            return {}
         prompt = _LLM_SYNONYM_PROMPT.format(
             species=", ".join(profile.plant_species) or "plant",
             stresses=", ".join(s.value for s in profile.stress_types) or "stress",
         )
         try:
             response = await litellm.acompletion(
-                model=model,
+                **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=600,
                 temperature=0.1,

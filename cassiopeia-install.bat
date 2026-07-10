@@ -43,16 +43,12 @@ echo        Docker is running.
 :: ── .env setup ───────────────────────────────────────────────────────────────
 echo [2/4] Configuring environment...
 if not exist ".env" (
-    copy ".env.example" ".env" >nul
-    echo        .env created from .env.example.
-    echo.
-    echo        IMPORTANT: Add your LLM API key to .env before launching.
-    echo        Opening .env in Notepad — fill in at least one API key, then save and close.
-    echo.
-    pause
-    notepad ".env"
+    echo        WARNING: .env not found.
+    echo        Copy .env from another installation or contact your administrator.
+    pause & exit /b 1
 ) else (
-    echo        .env already exists — skipping.
+    echo        .env found.
+    echo        NOTE: LLM API keys are configured per-user in the Settings UI after launch.
 )
 
 :: ── Build images ─────────────────────────────────────────────────────────────

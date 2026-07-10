@@ -21,6 +21,7 @@ dependencies = [
     "langgraph>=0.2",
     "langchain-community>=0.3",
     "chromadb[default]>=0.4",
+    "cryptography>=41",
 ]
 
 [project.scripts]

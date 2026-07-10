@@ -92,7 +92,6 @@ class LLMPaperScorer:
     """
 
     def __init__(self) -> None:
-        self._model = os.environ["LLM_SCORING_MODEL"]
         self._enabled = (
             os.environ.get("LLM_SCORING_ENABLED", "true").lower() == "true"
         )
@@ -101,7 +100,7 @@ class LLMPaperScorer:
         self._cache: dict[str, dict[str, float | str]] = {}
 
         if self._enabled:
-            logger.info("LLM scoring enabled — model: %s", self._model)
+            logger.info("LLM scoring enabled")
         else:
             logger.info("LLM scoring disabled — using keyword fallback")
 
@@ -110,12 +109,13 @@ class LLMPaperScorer:
         paper: PaperMetadata,
         profile: ResearcherProfile,
         existing_papers: list[ScoredPaper] | None = None,
+        llm_kwargs: dict | None = None,
     ) -> ScoredPaper:
         """Score a single paper; returns a ScoredPaper."""
-        if not self._enabled or not paper.abstract:
+        if not self._enabled or not paper.abstract or not llm_kwargs:
             return self._fallback.score_paper(paper, profile, existing_papers)
 
-        llm_dims = await self._llm_dimensions(paper, profile)
+        llm_dims = await self._llm_dimensions(paper, profile, llm_kwargs)
 
         recency = self._fallback._score_recency(paper)
         credibility = self._fallback._score_credibility(paper)
@@ -156,6 +156,7 @@ class LLMPaperScorer:
         self,
         paper: PaperMetadata,
         profile: ResearcherProfile,
+        llm_kwargs: dict,
     ) -> dict[str, float | str]:
         """Return cached LLM scores or invoke the model."""
         if paper.paper_id in self._cache:
@@ -171,7 +172,7 @@ class LLMPaperScorer:
             abstract=paper.abstract[:6000],
         )
 
-        result = await self._score_with_retry(prompt, paper.title)
+        result = await self._score_with_retry(prompt, paper.title, llm_kwargs)
         if result is None:
             fb = self._fallback.score_paper(paper, profile)
             result = {
@@ -185,7 +186,7 @@ class LLMPaperScorer:
         return result
 
     async def _score_with_retry(
-        self, prompt: str, title: str
+        self, prompt: str, title: str, llm_kwargs: dict
     ) -> dict[str, float | str] | None:
         """Attempt LLM scoring up to 4 times with backoff; return None on terminal failure."""
         _delays = [2, 8, 30]
@@ -193,7 +194,7 @@ class LLMPaperScorer:
             if delay:
                 await asyncio.sleep(delay)
             try:
-                return await self._one_llm_call(prompt)
+                return await self._one_llm_call(prompt, llm_kwargs)
             except litellm.RateLimitError:
                 if attempt < len(_delays):
                     logger.debug(
@@ -214,10 +215,10 @@ class LLMPaperScorer:
                 return None
         return None
 
-    async def _one_llm_call(self, prompt: str) -> dict[str, float | str]:
+    async def _one_llm_call(self, prompt: str, llm_kwargs: dict) -> dict[str, float | str]:
         """Make a single LLM call and parse the JSON result."""
         response = await litellm.acompletion(
-            model=self._model,
+            **llm_kwargs,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=384,
             response_format={"type": "json_object"},

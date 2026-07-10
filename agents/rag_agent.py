@@ -12,7 +12,7 @@ This Academy agent is the sole writer to ChromaDB.  It:
 - Detects contradictions between retrieved papers
 - Finds papers similar to a user-supplied anchor DOI or title
 
-Provider / model is controlled by ``LLM_CHAT_MODEL`` (LiteLLM convention).
+Provider / model is controlled per-researcher via ``UserSettingsStore``.
 Embeddings use ``all-MiniLM-L6-v2`` via ChromaDB's built-in ONNX runtime.
 """
 
@@ -37,6 +37,7 @@ from utils.json_utils import parse_json_response
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
 from utils.source_fetchers import _session as _aiohttp_session
+from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +229,8 @@ class SynthesisState(TypedDict):
     researcher_id: str              # for researcher-scoped ChromaDB queries
     max_iterations: int             # hard cap, from caller
     n_proposals: int                # how many proposals to request from the LLM
+    llm_s: dict                     # LiteLLM kwargs for scoring-tier model
+    llm_r: dict                     # LiteLLM kwargs for reasoning-tier model
 
 
 class RAGAgent(Agent):
@@ -256,7 +259,6 @@ class RAGAgent(Agent):
 
         self._store = PaperStore(_db)
         self._rag = RAGStore(persist_dir=_rag_dir)
-        self._chat_model = os.environ["LLM_CHAT_MODEL"]
 
         logger.info(
             "RAGAgent ready — %d papers already in ChromaDB",
@@ -443,10 +445,10 @@ class RAGAgent(Agent):
             f"{liked_lines}\n\n"
         )
 
-    async def _llm_proposals(self, prompt: str) -> list[dict]:
+    async def _llm_proposals(self, prompt: str, llm_r: dict) -> list[dict]:
         """Call the LLM with a combinations prompt and return parsed proposals."""
         response = await litellm.acompletion(
-            model=self._chat_model,
+            **llm_r,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=4000,
             response_format={"type": "json_object"},
@@ -535,7 +537,7 @@ class RAGAgent(Agent):
             instruments: Available facility instruments, forwarded to the critic
                 for feasibility_concerns assessment. Only used when with_critique=True.
             max_iterations: Number of propose → identify_gaps → retrieve iterations. 
-                ``0`` reverts to the pre-C single-shot behavior (one LLM_CHAT_MODEL
+                ``0`` reverts to the pre-C single-shot behavior (one reasoning-model
                 call, no gap-finding loop). Default: ``_MAX_ITERATIONS`` (3).
 
         Returns:
@@ -550,6 +552,13 @@ class RAGAgent(Agent):
             * **v1** (legacy, no longer produced) — same minus ``verification``,
               ``key_insights`` used ``{paper, insight}`` dicts.
         """
+        try:
+            llm_config = get_llm_config(researcher_id)
+            llm_s = llm_config.for_scoring()
+            llm_r = llm_config.for_reasoning()
+        except LLMNotConfiguredError:
+            return []
+
         await self.index_new_papers()
 
         if self._rag.count() == 0:
@@ -576,11 +585,11 @@ class RAGAgent(Agent):
 
         if max_iterations == 0:
             proposals = await self._single_shot_proposals(
-                hits, species, stresses, methods, keywords, liked_proposals, n_proposals,
+                hits, species, stresses, methods, keywords, liked_proposals, n_proposals, llm_r,
             )
         else:
             proposals, extra = await self._iterative_proposals(
-                hits, profile, liked_proposals, researcher_id, max_iterations, n_proposals,
+                hits, profile, liked_proposals, researcher_id, max_iterations, n_proposals, llm_s, llm_r,
             )
             for p in extra:
                 paper_text_by_id.setdefault(p["paper_id"], p["document"])
@@ -589,7 +598,7 @@ class RAGAgent(Agent):
             return []
         enriched = await self._enrich_proposals(proposals, researcher_id)
         return await self._annotate_proposals(
-            enriched, paper_text_by_id, with_critique, instruments or []
+            enriched, paper_text_by_id, with_critique, instruments or [], researcher_id, llm_s, llm_r,
         )
 
     async def _single_shot_proposals(
@@ -601,6 +610,7 @@ class RAGAgent(Agent):
         keywords: list[str] | None,
         liked_proposals: list[dict] | None,
         n_proposals: int,
+        llm_r: dict,
     ) -> list[dict] | None:
         prompt = _COMBINATIONS_PROMPT.format(
             species=", ".join(species) or "unspecified",
@@ -612,7 +622,7 @@ class RAGAgent(Agent):
             n_proposals=n_proposals,
         )
         try:
-            return await self._llm_proposals(prompt)
+            return await self._llm_proposals(prompt, llm_r)
         except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("synthesize_combinations (single-shot) failed: %s", exc)
             return None
@@ -625,6 +635,8 @@ class RAGAgent(Agent):
         researcher_id: str,
         max_iterations: int,
         n_proposals: int,
+        llm_s: dict,
+        llm_r: dict,
     ) -> tuple[list[dict] | None, list[dict]]:
         """Returns (proposals | None, additional_papers)."""
         initial_papers = [{"paper_id": h["paper_id"], "document": h["document"]} for h in hits]
@@ -636,6 +648,8 @@ class RAGAgent(Agent):
                 researcher_id=researcher_id,
                 max_iterations=max_iterations,
                 n_proposals=n_proposals,
+                llm_s=llm_s,
+                llm_r=llm_r,
             )
             return final_state["draft_proposals"], final_state["additional_papers"]
         except Exception as exc:
@@ -648,6 +662,9 @@ class RAGAgent(Agent):
         paper_text_by_id: dict[str, str],
         with_critique: bool,
         instruments: list[str],
+        researcher_id: str,
+        llm_s: dict,
+        llm_r: dict,
     ) -> list[dict]:
         """Attach verification (Aug A) and optionally critique (Aug D) to enriched proposals.
 
@@ -656,7 +673,7 @@ class RAGAgent(Agent):
         """
         try:
             verifications = await asyncio.gather(
-                *[self._verify_proposal_claims(p, paper_text_by_id) for p in proposals]
+                *[self._verify_proposal_claims(p, paper_text_by_id, llm_s) for p in proposals]
             )
             for proposal, verification in zip(proposals, verifications):
                 proposal["verification"] = verification
@@ -665,7 +682,7 @@ class RAGAgent(Agent):
 
         if with_critique:
             try:
-                proposals = await self.critique_proposals(proposals, instruments)
+                proposals = await self.critique_proposals(proposals, researcher_id, instruments)
             except Exception as exc:
                 logger.warning("Critique failed — proposals returned without it: %s", exc)
 
@@ -700,6 +717,7 @@ class RAGAgent(Agent):
         paper_id: str,
         insight: str,
         paper_text: str,
+        llm_s: dict,
     ) -> dict:
         """Verify one key_insight against its source paper, with SQLite caching.
 
@@ -743,7 +761,7 @@ class RAGAgent(Agent):
             first_chunk_id = None
             is_abstract_only = True
 
-        result = await verify_claim(text_to_verify, insight)
+        result = await verify_claim(text_to_verify, insight, llm_s)
         self._store.set_verify_cache(cache_key, result)
         return {
             "claim":            insight,
@@ -757,6 +775,7 @@ class RAGAgent(Agent):
         self,
         proposal: dict,
         paper_text_by_id: dict[str, str],
+        llm_s: dict,
     ) -> dict:
         """Verify each key_insight against its source paper concurrently.
 
@@ -781,6 +800,7 @@ class RAGAgent(Agent):
                 ki.get("paper_id", ""),
                 ki.get("insight", ""),
                 paper_text_by_id.get(ki.get("paper_id", ""), ""),
+                llm_s,
             )
             for ki in key_insights
         ]
@@ -807,11 +827,12 @@ class RAGAgent(Agent):
     async def critique_proposals(
         self,
         proposals: list[dict[str, Any]],
+        researcher_id: str,
         instruments: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Annotate proposals with structured critique from a critic LLM (Augmentation D).
 
-        One LLM_CHAT_MODEL call per proposal, run concurrently via ``asyncio.gather``.
+        One reasoning-model call per proposal, run concurrently via ``asyncio.gather``.
         Each proposal is annotated with a ``critique`` dict covering:
 
         - ``novelty`` — is the experiment genuinely novel, with a semantic search
@@ -830,11 +851,17 @@ class RAGAgent(Agent):
         Args:
             proposals: List of proposal dicts from ``synthesize_combinations``.
                 Should already have ``verification`` attached.
+            researcher_id: Used to load the active LLM config.
             instruments: Available facility instruments for feasibility assessment.
         """
+        try:
+            llm_r = get_llm_config(researcher_id).for_reasoning()
+        except LLMNotConfiguredError:
+            return [{**p, "critique": None} for p in proposals]
+
         _instruments = instruments or []
         critiques = await asyncio.gather(
-            *[self._critique_one_proposal(p, _instruments) for p in proposals]
+            *[self._critique_one_proposal(p, _instruments, llm_r) for p in proposals]
         )
         return [{**p, "critique": c} for p, c in zip(proposals, critiques)]
 
@@ -842,6 +869,7 @@ class RAGAgent(Agent):
         self,
         proposal: dict,
         instruments: list[str],
+        llm_r: dict,
     ) -> dict | None:
         """Retrieve semantically similar papers, then run one critique call."""
         from utils.llm_critic import critique_proposal
@@ -858,11 +886,11 @@ class RAGAgent(Agent):
                 "document": hit["document"][:500],
             })
 
-        return await critique_proposal(proposal, similar_papers, instruments)
+        return await critique_proposal(proposal, similar_papers, instruments, llm_r)
 
 
     async def _propose_node(self, state: dict) -> dict:
-        """Propose step: one LLM_CHAT_MODEL call to generate or refine draft proposals."""
+        """Propose step: one reasoning-model call to generate or refine draft proposals."""
         profile = state["profile"]
         all_papers = state["initial_papers"] + state["additional_papers"]
         context = self._format_context_blocks(all_papers)
@@ -887,7 +915,7 @@ class RAGAgent(Agent):
         ) + refinement_block
 
         try:
-            proposals = await self._llm_proposals(prompt)
+            proposals = await self._llm_proposals(prompt, state["llm_r"])
         except (litellm.APIError, json.JSONDecodeError) as exc:
             logger.warning("_propose_node failed: %s", exc)
             proposals = state["draft_proposals"]  # keep previous draft on failure
@@ -895,7 +923,7 @@ class RAGAgent(Agent):
         return {**state, "draft_proposals": proposals, "iteration": state["iteration"] + 1}
 
     async def _identify_gaps_node(self, state: dict) -> dict:
-        """Gap identification step: one LLM_SCORING_MODEL call to find evidence gaps in draft proposals."""
+        """Gap identification step: one scoring-model call to find evidence gaps in draft proposals."""
         proposals_bullets = "\n".join(
             f"  - [{p.get('theme', '')}] {p.get('suggestion', '')}"
             for p in state["draft_proposals"]
@@ -910,11 +938,9 @@ class RAGAgent(Agent):
             sub_queries_run_bullets=queries_bullets,
             max_sub_queries=_MAX_SUB_QUERIES_PER_ITERATION,
         )
-        scoring_model = os.environ["LLM_SCORING_MODEL"]
-
         try:
             response = await litellm.acompletion(
-                model=scoring_model,
+                **state["llm_s"],
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=400,
                 response_format={"type": "json_object"},
@@ -972,6 +998,8 @@ class RAGAgent(Agent):
         researcher_id: str,
         max_iterations: int,
         n_proposals: int = 5,
+        llm_s: dict,
+        llm_r: dict,
     ) -> dict:
         """Build and run the Augmentation C iterative synthesis StateGraph.
 
@@ -1018,6 +1046,8 @@ class RAGAgent(Agent):
             "researcher_id": researcher_id,
             "max_iterations": max_iterations,
             "n_proposals": n_proposals,
+            "llm_s": llm_s,
+            "llm_r": llm_r,
         }
         return await compiled.ainvoke(initial_state)
 
@@ -1044,6 +1074,7 @@ class RAGAgent(Agent):
         self,
         proposals: list[dict[str, Any]],
         available_equipment: list[str],
+        researcher_id: str = "",
     ) -> list[dict[str, Any]]:
         """Annotate experiment proposals with feasibility assessments.
 
@@ -1059,6 +1090,7 @@ class RAGAgent(Agent):
                 key.  Other keys are passed through unchanged.
             available_equipment: Flat list of instrument / capability names
                 that the facility provides (from the researcher profile).
+            researcher_id: Used to load the active LLM config.
 
         Returns:
             The same list of proposals, each extended with a ``feasibility``
@@ -1070,14 +1102,21 @@ class RAGAgent(Agent):
                 p.setdefault("feasibility", None)
             return proposals
 
+        try:
+            llm_r = get_llm_config(researcher_id).for_reasoning() if researcher_id else {}
+        except LLMNotConfiguredError:
+            for p in proposals:
+                p.setdefault("feasibility", None)
+            return proposals
+
         equipment_str = "\n".join(f"  - {e}" for e in available_equipment)
         results = []
         for proposal in proposals:
-            feasibility = await self._assess_one(proposal["suggestion"], equipment_str)
+            feasibility = await self._assess_one(proposal["suggestion"], equipment_str, llm_r)
             results.append({**proposal, "feasibility": feasibility})
         return results
 
-    async def _assess_one(self, suggestion: str, equipment_str: str) -> dict[str, Any]:
+    async def _assess_one(self, suggestion: str, equipment_str: str, llm_r: dict) -> dict[str, Any]:
         """Run the feasibility LLM call for a single proposal."""
         prompt = _FEASIBILITY_PROMPT.format(
             equipment=equipment_str,
@@ -1085,7 +1124,7 @@ class RAGAgent(Agent):
         )
         try:
             response = await litellm.acompletion(
-                model=self._chat_model,
+                **llm_r,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=600,
                 response_format={"type": "json_object"},
@@ -1105,7 +1144,7 @@ class RAGAgent(Agent):
             }
 
     async def _contradiction_pass(
-        self, query: str, n_papers: int, where: dict
+        self, query: str, n_papers: int, where: dict, llm_r: dict
     ) -> list[dict]:
         """Run one contradiction-detection LLM call over papers matching ``query``."""
         hits = self._rag.query(query, n_results=n_papers, where=where)
@@ -1130,7 +1169,7 @@ class RAGAgent(Agent):
 
         try:
             response = await litellm.acompletion(
-                model=self._chat_model,
+                **llm_r,
                 messages=[{"role": "user", "content": _CONTRADICTION_PROMPT.format(n=len(hits), context=context)}],
                 max_tokens=1200,
                 response_format={"type": "json_object"},
@@ -1185,10 +1224,15 @@ class RAGAgent(Agent):
         queries  = (terms * n_passes)[:n_passes]
         where    = {"researcher_id": researcher_id}
 
+        try:
+            llm_r = get_llm_config(researcher_id).for_reasoning()
+        except LLMNotConfiguredError:
+            return []
+
         seen_pairs: set[frozenset] = set()
         all_contradictions: list[dict] = []
         for query in queries:
-            for c in await self._contradiction_pass(query, n_papers_per_pass, where):
+            for c in await self._contradiction_pass(query, n_papers_per_pass, where, llm_r):
                 pair = frozenset(c.get("papers", []))
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
@@ -1280,11 +1324,18 @@ class RAGAgent(Agent):
         Builds a ReAct agent with a ``search_knowledge_base`` tool that
         queries ChromaDB, then streams the final answer back.
         """
+        if not researcher_id:
+            return "Please provide a researcher_id to use the synthesis feature."
         try:
-            return await self._run_react(question, researcher_id)
+            llm_r = get_llm_config(researcher_id).for_reasoning()
+        except LLMNotConfiguredError:
+            return "LLM not configured. Please set up a provider in Settings before using synthesis."
+
+        try:
+            return await self._run_react(question, researcher_id, llm_r)
         except Exception as exc:
             logger.warning("ReAct synthesis failed, falling back to direct RAG: %s", exc)
-            return await self._fallback_answer(question, researcher_id)
+            return await self._fallback_answer(question, researcher_id, llm_r)
 
     @action
     async def get_rag_status(self) -> dict[str, Any]:
@@ -1294,10 +1345,9 @@ class RAGAgent(Agent):
             "papers_in_chromadb": self._rag.count(),
             "papers_pending_indexing": len(unindexed),
             "embedding_model": "all-MiniLM-L6-v2 (ONNX)",
-            "chat_model": self._chat_model,
         }
 
-    async def _run_react(self, question: str, researcher_id: str | None) -> str:
+    async def _run_react(self, question: str, researcher_id: str | None, llm_r: dict) -> str:
         """Run LangGraph create_react_agent with ChromaDB tool."""
         from langchain_core.tools import tool as lc_tool
         from langchain_community.chat_models import ChatLiteLLM
@@ -1316,7 +1366,9 @@ class RAGAgent(Agent):
                 parts.append(f"[{title}]\n{hit['document'][:500]}")
             return "\n\n---\n\n".join(parts)
 
-        llm = ChatLiteLLM(model=self._chat_model, temperature=0.3)
+        model = llm_r.get("model", "")
+        extra = {k: v for k, v in llm_r.items() if k != "model"}
+        llm = ChatLiteLLM(model=model, temperature=0.3, **extra)
         agent = create_react_agent(llm, [search_knowledge_base])
 
         result = await agent.ainvoke(
@@ -1325,7 +1377,7 @@ class RAGAgent(Agent):
         last = result["messages"][-1]
         return last.content if hasattr(last, "content") else str(last)
 
-    async def _fallback_answer(self, question: str, researcher_id: str | None) -> str:
+    async def _fallback_answer(self, question: str, researcher_id: str | None, llm_r: dict) -> str:
         """Direct RAG answer without LangGraph (used if langgraph unavailable)."""
         hits = await self.query(question, n_results=5, researcher_id=researcher_id)
         if not hits:
@@ -1341,7 +1393,7 @@ class RAGAgent(Agent):
             f"Question: {question}"
         )
         response = await litellm.acompletion(
-            model=self._chat_model,
+            **llm_r,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=800,
             temperature=0.3,

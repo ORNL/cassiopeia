@@ -28,6 +28,15 @@ from models.schemas import ResearcherProfile, SourceType, StressType
 from utils.query_generator import QueryGenerator
 from utils.source_fetchers import _arxiv_query_terms, _epmc_query_terms
 
+_MOCK_LLM = {"model": "test/mock-model"}
+
+
+def _make_mock_config():
+    config = MagicMock()
+    config.for_scoring.return_value = _MOCK_LLM
+    config.for_reasoning.return_value = _MOCK_LLM
+    return config
+
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 _MOCK_SYNONYMS = {
@@ -114,9 +123,10 @@ async def test_no_temporal_range_in_search_terms():
 async def test_species_synonyms_in_group_1():
     """LLM-provided species synonyms must appear in group 1."""
     profile = _fred_profile()
-    with patch("litellm.acompletion", new=AsyncMock(
-        return_value=_mock_llm_response(_MOCK_SYNONYMS)
-    )):
+    with (
+        patch("utils.query_generator.get_llm_config", return_value=_make_mock_config()),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+    ):
         queries = await QueryGenerator().generate_queries_async(profile)
     pennycress_qs = [q for q in queries if q.base_terms[0] == "pennycress"]
     for q in pennycress_qs:
@@ -129,9 +139,10 @@ async def test_species_synonyms_in_group_1():
 async def test_stress_synonyms_in_group_2_non_arxiv():
     """Stress synonyms must appear in group 2 for non-arXiv sources."""
     profile = _fred_profile()
-    with patch("litellm.acompletion", new=AsyncMock(
-        return_value=_mock_llm_response(_MOCK_SYNONYMS)
-    )):
+    with (
+        patch("utils.query_generator.get_llm_config", return_value=_make_mock_config()),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+    ):
         queries = await QueryGenerator().generate_queries_async(profile)
     biorxiv_qs = [q for q in queries if q.source_target == SourceType.BIORXIV]
     for q in biorxiv_qs:
@@ -164,9 +175,10 @@ async def test_arxiv_queries_have_bioinformatics_terms():
 async def test_epmc_query_string_uses_or():
     """OR-group queries sent to Europe PMC must contain OR operators."""
     profile = _fred_profile(sources=["biorxiv"])
-    with patch("litellm.acompletion", new=AsyncMock(
-        return_value=_mock_llm_response(_MOCK_SYNONYMS)
-    )):
+    with (
+        patch("utils.query_generator.get_llm_config", return_value=_make_mock_config()),
+        patch("litellm.acompletion", new=AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))),
+    ):
         queries = await QueryGenerator().generate_queries_async(profile)
     for q in queries:
         s = _epmc_query_terms(q)

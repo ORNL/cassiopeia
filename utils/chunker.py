@@ -14,9 +14,11 @@ stays clean: one call returns chunks or None (paywalled/unavailable).
 from __future__ import annotations
 
 import logging
-import os
 
 logger = logging.getLogger(__name__)
+
+# Model used only for token counting (litellm tokenizer) — not for LLM calls.
+_TOKEN_COUNT_MODEL = "gpt-4o"
 
 CHUNK_TARGET_TOKENS  = 400
 CHUNK_OVERLAP_TOKENS = 80
@@ -43,7 +45,7 @@ def chunk_paper(paper_id: str, sections: dict[str, str]) -> list[dict]:
     Sections are processed in SECTION_PRIORITY order; any unlisted sections follow.
     Chunks shorter than CHUNK_MIN_TOKENS are discarded.
     """
-    model = os.environ.get("LLM_SCORING_MODEL", "gpt-4o")
+    model = _TOKEN_COUNT_MODEL
     # words-per-token approximation: ~5 chars/word, ~4 chars/token → ~1.25 words/token
     target_words  = CHUNK_TARGET_TOKENS * 5 // 4   # ≈ 500 words
     overlap_words = CHUNK_OVERLAP_TOKENS * 5 // 4  # ≈ 100 words

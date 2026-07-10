@@ -6,6 +6,7 @@ import { createRoot } from "react-dom/client";
 import PropTypes from "prop-types";
 import Dashboard from "./Dashboard.jsx";
 import LandingPage from "./LandingPage.jsx";
+import Settings from "./Settings.jsx";
 
 // ── Priority config ──────────────────────────────────────────────────────────
 
@@ -246,7 +247,7 @@ PrioritySetupStep.propTypes = {
 
 // ── ChatView ──────────────────────────────────────────────────────────────────
 
-function ChatView({ onBack, researcherName, onOpenSettings }) {
+function ChatView({ onBack, researcherName, onOpenSettings, onOpenLLMSettings }) {
   const [chainlitUrl, setChainlitUrl] = useState(null);
 
   useEffect(() => {
@@ -268,6 +269,7 @@ function ChatView({ onBack, researcherName, onOpenSettings }) {
         <button style={S.back} onClick={onBack}>← Back</button>
         <span style={S.barTitle}>CASSIOPEIA</span>
         <button style={S.cogBtn} onClick={onOpenSettings} title="Priority settings">⚙</button>
+        <button style={S.cogBtn} onClick={onOpenLLMSettings} title="LLM provider settings">🔑</button>
         {chainlitUrl && (
           <a style={S.open} href={chainlitUrl} target="_blank" rel="noreferrer">
             Open in new tab ↗
@@ -292,6 +294,7 @@ ChatView.propTypes = {
   onBack: PropTypes.func.isRequired,
   researcherName: PropTypes.string,
   onOpenSettings: PropTypes.func.isRequired,
+  onOpenLLMSettings: PropTypes.func.isRequired,
 };
 
 // ── App ───────────────────────────────────────────────────────────────────────
@@ -302,6 +305,7 @@ function App() {
   const [priorities, setPriorities] = useState(DEFAULT_PRIORITIES);
   const [scanSettings, setScanSettings] = useState(DEFAULT_SCAN_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
+  const [showLLMSettings, setShowLLMSettings] = useState(false);
   const [loginPending, setLoginPending] = useState(false);
 
   const handleLogin = async (name) => {
@@ -314,11 +318,20 @@ function App() {
       const r = await fetch(`/api/researcher/${id}`);
       backendKnown = r.ok && (await r.json()) !== null;
     } catch { /* network error — fall back to treating as new */ }
+
+    // Check if the user has an LLM provider configured; auto-open if not.
+    let llmConfigured = false;
+    try {
+      const r = await fetch(`/api/settings/active?researcher_id=${encodeURIComponent(id)}`);
+      if (r.ok) { const d = await r.json(); llmConfigured = d.configured === true; }
+    } catch { /* ignore — don't block login */ }
+
     setLoginPending(false);
     const savedPriorities = backendKnown ? loadPriorities(id) : null;
     const savedScan       = backendKnown ? loadScanSettings(id) : null;
     setResearcher({ name, id });
     if (savedScan) setScanSettings(savedScan);
+    if (!llmConfigured) setShowLLMSettings(true);
     if (savedPriorities) {
       setPriorities(savedPriorities);
       setMode("dashboard");
@@ -338,11 +351,20 @@ function App() {
     if (mode === "setup") setMode("dashboard");
   };
 
-  const openSettings = () => setShowSettings(true);
-  const closeSettings = () => setShowSettings(false);
+  const openSettings    = () => setShowSettings(true);
+  const closeSettings   = () => setShowSettings(false);
+  const openLLMSettings = () => setShowLLMSettings(true);
+  const closeLLMSettings = () => setShowLLMSettings(false);
 
   if (mode === "setup" && researcher)
-    return <PrioritySetupStep name={researcher.name} onSave={handleSaveSettings} />;
+    return (
+      <>
+        <PrioritySetupStep name={researcher.name} onSave={handleSaveSettings} />
+        {showLLMSettings && (
+          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
+        )}
+      </>
+    );
 
   if (mode === "dashboard" && researcher)
     return (
@@ -354,6 +376,7 @@ function App() {
           priorities={priorities}
           scanSettings={scanSettings}
           onOpenSettings={openSettings}
+          onOpenLLMSettings={openLLMSettings}
         />
         {showSettings && (
           <PriorityModal
@@ -362,6 +385,9 @@ function App() {
             onSave={handleSaveSettings}
             onClose={closeSettings}
           />
+        )}
+        {showLLMSettings && (
+          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
         )}
       </>
     );
@@ -373,6 +399,7 @@ function App() {
           onBack={() => setMode(null)}
           researcherName={researcher.name}
           onOpenSettings={openSettings}
+          onOpenLLMSettings={openLLMSettings}
         />
         {showSettings && (
           <PriorityModal
@@ -381,6 +408,9 @@ function App() {
             onSave={handleSaveSettings}
             onClose={closeSettings}
           />
+        )}
+        {showLLMSettings && (
+          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
         )}
       </>
     );

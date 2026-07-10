@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -14,6 +13,16 @@ import pytest
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+_MOCK_LLM = {"model": "test/mock-model"}
+
+
+def _make_mock_config():
+    config = MagicMock()
+    config.for_scoring.return_value = _MOCK_LLM
+    config.for_reasoning.return_value = _MOCK_LLM
+    return config
+
 
 def _make_agent():
     """Return a RAGAgent with stubbed store and RAG store."""
@@ -26,7 +35,6 @@ def _make_agent():
     agent._store.get_paper_metadata.return_value = {"title": "Test Paper"}
     agent._rag = MagicMock()
     agent._rag.query.return_value = []
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
     return agent
 
 
@@ -71,8 +79,11 @@ async def test_critique_proposals_adds_critique_field():
     """critique_proposals attaches the critique dict to each proposal."""
     agent = _make_agent()
 
-    with patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)):
-        result = await agent.critique_proposals([_PROPOSAL], instruments=["VNIR"])
+    with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
+        patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)),
+    ):
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=["VNIR"])
 
     assert len(result) == 1
     assert result[0]["critique"] is not None
@@ -84,8 +95,11 @@ async def test_critique_proposals_none_on_failure():
     """When critique_proposal returns None, the critique field is set to None."""
     agent = _make_agent()
 
-    with patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=None)):
-        result = await agent.critique_proposals([_PROPOSAL], instruments=[])
+    with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
+        patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=None)),
+    ):
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=[])
 
     assert result[0]["critique"] is None
 
@@ -97,8 +111,11 @@ async def test_critique_proposals_concurrent():
     proposals = [_PROPOSAL, _PROPOSAL, _PROPOSAL]
 
     mock_critique = AsyncMock(return_value=_GOOD_CRITIQUE)
-    with patch("utils.llm_critic.critique_proposal", new=mock_critique):
-        result = await agent.critique_proposals(proposals, instruments=["VNIR"])
+    with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
+        patch("utils.llm_critic.critique_proposal", new=mock_critique),
+    ):
+        result = await agent.critique_proposals(proposals, researcher_id="r1", instruments=["VNIR"])
 
     assert mock_critique.call_count == 3
 
@@ -108,8 +125,11 @@ async def test_critique_proposals_preserves_existing_fields():
     """critique_proposals does not overwrite any existing proposal fields."""
     agent = _make_agent()
 
-    with patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)):
-        result = await agent.critique_proposals([_PROPOSAL], instruments=[])
+    with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
+        patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)),
+    ):
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=[])
 
     assert result[0]["suggestion"] == _PROPOSAL["suggestion"]
     assert result[0]["verification"] == _PROPOSAL["verification"]
@@ -134,7 +154,6 @@ async def test_synthesize_combinations_with_critique_false():
     agent._rag.query.return_value = [
         {"paper_id": "p1", "document": "Abstract text.", "distance": 0.5}
     ]
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
 
     fake_proposal = {
         "theme": "test theme",
@@ -147,6 +166,7 @@ async def test_synthesize_combinations_with_critique_false():
     llm_verify_result = {"supported": True, "confidence": 0.9, "reason": "Matches."}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_llm_proposals", new=AsyncMock(return_value=[fake_proposal])),
         patch.object(agent, "_check_novelty", new=AsyncMock(return_value=(True, ""))),
@@ -158,6 +178,7 @@ async def test_synthesize_combinations_with_critique_false():
             stresses=["drought"],
             methods=["hyperspectral_imaging"],
             with_critique=False,
+            max_iterations=0,
         )
 
     assert len(result) == 1
@@ -179,7 +200,6 @@ async def test_synthesize_combinations_with_critique_true():
     agent._rag.query.return_value = [
         {"paper_id": "p1", "document": "Abstract text.", "distance": 0.5}
     ]
-    agent._chat_model = os.environ.get("LLM_CHAT_MODEL", "test/mock-model")
 
     fake_proposal = {
         "theme": "test theme",
@@ -192,6 +212,7 @@ async def test_synthesize_combinations_with_critique_true():
     llm_verify_result = {"supported": True, "confidence": 0.9, "reason": "Matches."}
 
     with (
+        patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch.object(agent, "index_new_papers", new=AsyncMock(return_value={})),
         patch.object(agent, "_llm_proposals", new=AsyncMock(return_value=[fake_proposal])),
         patch.object(agent, "_check_novelty", new=AsyncMock(return_value=(True, ""))),
@@ -204,6 +225,7 @@ async def test_synthesize_combinations_with_critique_true():
             stresses=["drought"],
             methods=["hyperspectral_imaging"],
             with_critique=True,
+            max_iterations=0,
         )
 
     assert len(result) == 1

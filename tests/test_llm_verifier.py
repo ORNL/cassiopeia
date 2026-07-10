@@ -12,6 +12,8 @@ import pytest
 
 from utils.llm_verifier import verify_claim
 
+_MOCK_LLM = {"model": "test/mock-model"}
+
 
 def _mock_response(payload: dict) -> MagicMock:
     msg = MagicMock()
@@ -27,7 +29,7 @@ def _mock_response(payload: dict) -> MagicMock:
 async def test_verify_claim_supported():
     resp = _mock_response({"supported": True, "confidence": 0.95, "reason": "Direct match."})
     with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
-        result = await verify_claim("Some paper text.", "The paper reports X.")
+        result = await verify_claim("Some paper text.", "The paper reports X.", _MOCK_LLM)
     assert result["supported"] is True
     assert result["confidence"] == pytest.approx(0.95)
     assert result["reason"] == "Direct match."
@@ -37,7 +39,7 @@ async def test_verify_claim_supported():
 async def test_verify_claim_unsupported():
     resp = _mock_response({"supported": False, "confidence": 0.80, "reason": "Not mentioned."})
     with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
-        result = await verify_claim("Some paper text.", "The paper reports Y.")
+        result = await verify_claim("Some paper text.", "The paper reports Y.", _MOCK_LLM)
     assert result["supported"] is False
     assert result["confidence"] == pytest.approx(0.80)
 
@@ -50,7 +52,7 @@ async def test_verify_claim_malformed_json_then_success():
     good_resp = _mock_response({"supported": True, "confidence": 0.7, "reason": "OK."})
 
     with patch("litellm.acompletion", new=AsyncMock(side_effect=[bad_resp, good_resp])):
-        result = await verify_claim("text", "insight")
+        result = await verify_claim("text", "insight", _MOCK_LLM)
     assert result["supported"] is True
 
 
@@ -61,7 +63,7 @@ async def test_verify_claim_persistent_failure():
     bad_resp.choices[0].message.content = "```not json```"
 
     with patch("litellm.acompletion", new=AsyncMock(return_value=bad_resp)):
-        result = await verify_claim("text", "insight")
+        result = await verify_claim("text", "insight", _MOCK_LLM)
     assert result["supported"] is None
     assert result["confidence"] is None
     assert result["reason"] == "verification_failed"
@@ -71,6 +73,6 @@ async def test_verify_claim_persistent_failure():
 async def test_verify_claim_llm_exception():
     """LLM raises an exception — must return null entry."""
     with patch("litellm.acompletion", new=AsyncMock(side_effect=RuntimeError("timeout"))):
-        result = await verify_claim("text", "insight")
+        result = await verify_claim("text", "insight", _MOCK_LLM)
     assert result["supported"] is None
     assert result["reason"] == "verification_failed"
