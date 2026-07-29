@@ -291,7 +291,8 @@ cp .env.example .env
 | `CHAINLIT_URL` | `http://localhost:8001` | URL where the browser reaches the Chainlit server. |
 | `API_PORT` | `8000` | FastAPI port. |
 | `CHAINLIT_PORT` | `8001` | Chainlit port. |
-| `GLOBUS_AUTH_ENABLED` | `false` | Require Globus sign-in. See [Authentication](#authentication). |
+| `GLOBUS_AUTH_ENABLED` | `true` | Require Globus sign-in. See [Authentication](#authentication). |
+| `CASSIOPEIA_ALLOW_INSECURE_DEV` | `false` | Permit running with auth disabled on a non-loopback bind. Never set on a shared deployment. |
 | `GLOBUS_CLIENT_ID` | — | Globus confidential client UUID. |
 | `GLOBUS_CLIENT_SECRET` | — | Client secret. Required: token introspection needs a confidential client. |
 | `GLOBUS_REDIRECT_URI` | `http://localhost:5173` | Must match a redirect URI registered on the client. |
@@ -326,8 +327,20 @@ Restrict access to a lab or project by listing its Globus Group UUIDs in
 With `GLOBUS_AUTH_ENABLED=false` the API trusts an `X-User-ID` header and the
 landing page shows a name box instead of a sign-in button, so several identities
 can be exercised without registering a client. **This is not an access control**
-— anyone who can reach the port can claim any identity. Never leave it off on a
-deployment others can reach.
+— anyone who can reach the port can claim any identity.
+
+Two things keep that from reaching a deployment:
+
+- **The default is `true`.** An unset `GLOBUS_AUTH_ENABLED` means authentication
+  is on, so forgetting it fails closed.
+- **The server refuses to start** with authentication disabled unless it is bound
+  to the loopback interface. `uvicorn api_server:app --port 8000` binds
+  `127.0.0.1` and is fine; the Compose command's `--host 0.0.0.0` is not, and
+  exits with an explanatory error.
+
+Set `CASSIOPEIA_ALLOW_INSECURE_DEV=true` to override the second check when you
+genuinely mean it — running the containers on your own machine without a Globus
+client, for example. It logs a warning on every start.
 
 ### What is shared and what is not
 

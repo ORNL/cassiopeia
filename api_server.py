@@ -37,7 +37,7 @@ from academy.logging import init_logging
 
 from api.auth import router as auth_router
 from api.settings import router as settings_router
-from utils.auth import CurrentUser
+from utils.auth import CurrentUser, assert_safe_configuration
 from models.schemas import ResearcherProfile, StressType
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
@@ -89,6 +89,9 @@ def _set_progress(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _mining_handle, _rag_handle, _paper_store
+
+    # Fail before serving a single request if auth is off on a public interface.
+    assert_safe_configuration()
 
     scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
     db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")

@@ -9,11 +9,16 @@ identity is *never* taken from a query parameter or request body: a caller who
 can name a researcher_id can otherwise read and overwrite that researcher's
 papers, proposals and stored API keys.
 
-Three modes, selected by ``GLOBUS_AUTH_ENABLED``:
+Three modes, selected by ``GLOBUS_AUTH_ENABLED`` (**default: enabled**):
 
   enabled + Bearer token  — introspect against Globus, map to a Researcher
   enabled + no token      — 401
   disabled                — ``X-User-ID`` header, else "anonymous" (local dev)
+
+Disabling authentication is a local-development convenience, not a
+configuration: :func:`assert_safe_configuration` refuses to start a server that
+has it disabled while bound to anything other than the loopback interface. The
+default is enabled so that forgetting to set it fails closed.
 
 Configuration::
 
@@ -28,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any
@@ -40,7 +46,14 @@ logger = logging.getLogger(__name__)
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
-GLOBUS_AUTH_ENABLED = os.environ.get("GLOBUS_AUTH_ENABLED", "false").lower() == "true"
+# Fail closed: an unset value means authentication is ON.
+GLOBUS_AUTH_ENABLED = os.environ.get("GLOBUS_AUTH_ENABLED", "true").lower() == "true"
+
+# Escape hatch for the deliberate case — running the containers locally without
+# a Globus client, for instance. Never set this on a shared deployment.
+ALLOW_INSECURE_DEV = (
+    os.environ.get("CASSIOPEIA_ALLOW_INSECURE_DEV", "false").lower() == "true"
+)
 GLOBUS_CLIENT_ID = os.environ.get("GLOBUS_CLIENT_ID", "")
 GLOBUS_CLIENT_SECRET = os.environ.get("GLOBUS_CLIENT_SECRET", "")
 GLOBUS_REDIRECT_URI = os.environ.get("GLOBUS_REDIRECT_URI", "http://localhost:5173")
@@ -79,8 +92,6 @@ class Researcher:
     name: str | None = None
     groups: list[str] = field(default_factory=list)
     auth_method: str = "development"
-    # Globus id_token (a JWT) — usable as the Bearer for AmSC / MAG.
-    access_token: str | None = None
 
     @property
     def is_authenticated(self) -> bool:
@@ -241,14 +252,73 @@ async def get_current_user(
         name=info.name,
         groups=groups,
         auth_method="globus",
-        # The id_token JWT is what AmSC/MAG accept; fall back to the opaque token.
-        access_token=request.headers.get("X-Id-Token") or token,
     )
 
 
 # Annotate handler parameters with this to receive the authenticated caller:
 #     async def handler(user: CurrentUser) -> ...:
 CurrentUser = Annotated[Researcher, Depends(get_current_user)]
+
+
+# ── Startup safety check ──────────────────────────────────────────────────────
+
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost", "[::1]"}
+
+
+def _bind_host() -> str:
+    """Best-effort read of the interface uvicorn was told to bind.
+
+    Covers the documented launch paths: ``--host`` on the command line (Docker
+    Compose passes ``--host 0.0.0.0``) and the usual environment variables. A
+    bare ``uvicorn api_server:app`` binds 127.0.0.1, which is why that is the
+    fallback.
+    """
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--host" and i + 1 < len(argv):
+            return argv[i + 1]
+        if arg.startswith("--host="):
+            return arg.split("=", 1)[1]
+    return os.environ.get("UVICORN_HOST") or os.environ.get("HOST") or "127.0.0.1"
+
+
+def assert_safe_configuration() -> None:
+    """Refuse to serve unauthenticated traffic to anything but the local machine.
+
+    Raises:
+        RuntimeError: authentication is disabled while bound to a non-loopback
+            interface, and the insecure-dev override was not set.
+    """
+    if GLOBUS_AUTH_ENABLED:
+        logger.info("Globus authentication enabled")
+        return
+
+    host = _bind_host()
+    if ALLOW_INSECURE_DEV:
+        logger.warning(
+            "AUTHENTICATION DISABLED on %s via CASSIOPEIA_ALLOW_INSECURE_DEV. "
+            "Any caller can claim any researcher identity.",
+            host,
+        )
+        return
+
+    if host not in _LOOPBACK_HOSTS:
+        raise RuntimeError(
+            f"Refusing to start: GLOBUS_AUTH_ENABLED is false but the server is "
+            f"bound to {host!r}, which is reachable from other machines. Without "
+            f"authentication any caller can read and modify any researcher's "
+            f"papers, proposals and stored API keys.\n"
+            f"  • To run for real:   set GLOBUS_AUTH_ENABLED=true and configure "
+            f"GLOBUS_CLIENT_ID / GLOBUS_CLIENT_SECRET\n"
+            f"  • For local work:    bind to 127.0.0.1\n"
+            f"  • Deliberate excep.: set CASSIOPEIA_ALLOW_INSECURE_DEV=true"
+        )
+
+    logger.warning(
+        "Authentication is DISABLED (development mode, bound to %s). "
+        "The X-User-ID header is trusted — this is not an access control.",
+        host,
+    )
 
 
 def auth_config() -> dict[str, Any]:

@@ -72,7 +72,7 @@ export function AuthProvider({ children }) {
 
   const clearSession = useCallback(() => {
     sessionStorage.removeItem(AUTH_KEY);
-    configureApi({ token: null, idToken: null });
+    configureApi({ token: null });
     setUser(null);
   }, []);
 
@@ -84,11 +84,7 @@ export function AuthProvider({ children }) {
 
   const applyTokens = useCallback((tokens) => {
     sessionStorage.setItem(AUTH_KEY, JSON.stringify(tokens));
-    configureApi({
-      token: tokens.accessToken,
-      idToken: tokens.idToken || null,
-      onUnauthorized: handleUnauthorized,
-    });
+    configureApi({ token: tokens.accessToken, onUnauthorized: handleUnauthorized });
   }, [handleUnauthorized]);
 
   // Load auth configuration, then resolve the current identity.
@@ -150,7 +146,6 @@ export function AuthProvider({ children }) {
         }
         applyTokens({
           accessToken: res.access_token,
-          idToken: res.id_token,
           expiresAt: Date.now() + (res.expires_in || 3600) * 1000,
         });
       } else {

@@ -10,7 +10,6 @@
 
 let _auth = {
   token: null,      // Globus access token
-  idToken: null,    // Globus id_token (JWT) — accepted by AmSC / MAG
   devUserId: null,  // development identity, used only when auth is disabled
   onUnauthorized: () => {},
 };
@@ -24,7 +23,6 @@ export async function apiFetch(path, options = {}) {
   const headers = { ...(options.headers || {}) };
   if (_auth.token) {
     headers.Authorization = `Bearer ${_auth.token}`;
-    if (_auth.idToken) headers["X-Id-Token"] = _auth.idToken;
   } else if (_auth.devUserId) {
     headers["X-User-ID"] = _auth.devUserId;
   }

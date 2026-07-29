@@ -59,8 +59,6 @@ class TokenExchangeRequest(BaseModel):
 
 class TokenExchangeResponse(BaseModel):
     access_token: str
-    # JWT — required by APIs that validate via JWKS (AmSC / MAG).
-    id_token: str | None = None
     expires_in: int
     token_type: str
     scope: str | None = None
@@ -122,7 +120,6 @@ async def exchange_token(req: TokenExchangeRequest) -> TokenExchangeResponse:
     data = response.json()
     return TokenExchangeResponse(
         access_token=data["access_token"],
-        id_token=data.get("id_token"),
         expires_in=data.get("expires_in", 3600),
         token_type=data.get("token_type", "Bearer"),
         scope=data.get("scope"),
