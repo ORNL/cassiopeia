@@ -61,6 +61,28 @@ fi
 API_PORT="${API_PORT:-8000}"
 # CHAINLIT_PORT="${CHAINLIT_PORT:-8001}"  # Chainlit disabled
 
+# ── Authentication configuration ─────────────────────────────────────────────
+# Run the server's own startup check here, in this terminal. Otherwise a
+# misconfiguration kills uvicorn inside a tmux pane and the only symptom the
+# user sees is the Vite proxy reporting ECONNREFUSED on port 8000.
+_auth_check=$(cd "$SCRIPT_DIR" && python3 - <<'PYCHECK' 2>&1
+import sys
+sys.argv = ["uvicorn", "--host", "127.0.0.1"]   # what launch.sh runs below
+try:
+    from utils.auth import assert_safe_configuration
+except Exception:
+    sys.exit(0)          # import trouble surfaces later, with a real traceback
+try:
+    assert_safe_configuration()
+except RuntimeError as exc:
+    print(exc)
+    sys.exit(1)
+PYCHECK
+) || {
+    echo "ERROR: $_auth_check"
+    exit 1
+}
+
 # ── Port conflict check ───────────────────────────────────────────────────────
 for _port in "$API_PORT"; do
     if ss -tlnH "sport = :$_port" 2>/dev/null | grep -q .; then
