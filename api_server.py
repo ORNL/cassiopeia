@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from academy.logging import init_logging
 
+from api.auth import router as auth_router
 from api.settings import router as settings_router
 from models.schemas import ResearcherProfile, StressType
 from utils.agent_bridge import _call, launch_agents, run_in_context
@@ -125,6 +126,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(settings_router)
 
 
