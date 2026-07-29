@@ -246,6 +246,30 @@ def test_bare_uvicorn_invocation_is_treated_as_loopback(monkeypatch):
     auth_mod.assert_safe_configuration()
 
 
+def test_start_refused_when_auth_enabled_but_client_unconfigured(monkeypatch):
+    """Otherwise sign-in fails at Globus with 'Missing client_id parameter'."""
+    monkeypatch.setattr(auth_mod, "GLOBUS_AUTH_ENABLED", True)
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_ID", "")
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_SECRET", "")
+    with pytest.raises(RuntimeError, match="GLOBUS_CLIENT_ID"):
+        auth_mod.assert_safe_configuration()
+
+
+def test_start_refused_when_only_the_secret_is_missing(monkeypatch):
+    monkeypatch.setattr(auth_mod, "GLOBUS_AUTH_ENABLED", True)
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_ID", "some-uuid")
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_SECRET", "")
+    with pytest.raises(RuntimeError, match="GLOBUS_CLIENT_SECRET"):
+        auth_mod.assert_safe_configuration()
+
+
+def test_start_allowed_when_auth_enabled_and_configured(monkeypatch):
+    monkeypatch.setattr(auth_mod, "GLOBUS_AUTH_ENABLED", True)
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_ID", "some-uuid")
+    monkeypatch.setattr(auth_mod, "GLOBUS_CLIENT_SECRET", "some-secret")
+    auth_mod.assert_safe_configuration()
+
+
 def test_explicit_override_permits_public_bind_without_auth(monkeypatch):
     monkeypatch.setattr(auth_mod, "GLOBUS_AUTH_ENABLED", False)
     monkeypatch.setattr(auth_mod, "ALLOW_INSECURE_DEV", True)

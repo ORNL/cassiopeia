@@ -290,6 +290,25 @@ def assert_safe_configuration() -> None:
             interface, and the insecure-dev override was not set.
     """
     if GLOBUS_AUTH_ENABLED:
+        missing = [
+            name
+            for name, value in (
+                ("GLOBUS_CLIENT_ID", GLOBUS_CLIENT_ID),
+                ("GLOBUS_CLIENT_SECRET", GLOBUS_CLIENT_SECRET),
+            )
+            if not value
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Refusing to start: authentication is enabled but "
+                f"{' and '.join(missing)} {'is' if len(missing) == 1 else 'are'} "
+                f"not set. Sign-in would fail at Globus with "
+                f"'Missing client_id parameter' rather than here.\n"
+                f"  • Register a confidential client at "
+                f"https://app.globus.org/settings/developers and set both in .env\n"
+                f"  • Or, for local work only: GLOBUS_AUTH_ENABLED=false "
+                f"(permitted when bound to 127.0.0.1)"
+            )
         logger.info("Globus authentication enabled")
         return
 

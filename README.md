@@ -457,12 +457,22 @@ authenticated.
 # One-time setup
 python -m venv academy
 source academy/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[auth,dev]"
 cd frontend && npm install && cd ..
+cp .env.example .env
+
+# Working locally without a Globus client? Use development mode:
+#   set GLOBUS_AUTH_ENABLED=false in .env
+# The landing page then asks for a name instead of offering Globus sign-in.
+# launch.sh binds 127.0.0.1, so this is permitted.
 
 # Start all services in a tmux session
 ./launch.sh
 ```
+
+Leaving `GLOBUS_AUTH_ENABLED=true` without `GLOBUS_CLIENT_ID` and
+`GLOBUS_CLIENT_SECRET` is refused at startup, rather than failing later at
+Globus with *"Missing client_id parameter"*.
 
 `launch.sh` checks for port conflicts, pre-loads the embedding model, then starts the API server, Chainlit, and the Vite dev server in separate tmux panes.
 
