@@ -13,15 +13,14 @@ from __future__ import annotations
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from utils.auth import (
     GLOBUS_CLIENT_SECRET,
     GLOBUS_TOKEN_URI,
-    Researcher,
+    CurrentUser,
     auth_config,
-    get_current_user,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,7 +74,7 @@ async def get_config() -> AuthConfigResponse:
 
 
 @router.get("/me", response_model=UserInfoResponse)
-async def get_me(user: Researcher = Depends(get_current_user)) -> UserInfoResponse:
+async def get_me(user: CurrentUser) -> UserInfoResponse:
     """Return the authenticated caller, or the development principal."""
     return UserInfoResponse(
         id=user.id,

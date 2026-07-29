@@ -30,9 +30,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import Depends, HTTPException, Request, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 logger = logging.getLogger(__name__)
@@ -140,13 +141,15 @@ async def introspect_token(token: str) -> TokenInfo | None:
         logger.error("GLOBUS_CLIENT_ID / GLOBUS_CLIENT_SECRET are not configured")
         return None
 
+    # globus-sdk is synchronous — keep the network round-trip off the event loop.
     try:
         client = ConfidentialAppAuthClient(
             client_id=GLOBUS_CLIENT_ID, client_secret=GLOBUS_CLIENT_SECRET
         )
-        data = client.oauth2_token_introspect(token).data
-    except Exception as exc:
-        logger.error("Globus token introspection failed: %s", exc)
+        response = await run_in_threadpool(client.oauth2_token_introspect, token)
+        data = response.data
+    except Exception:
+        logger.exception("Globus token introspection failed")
         return None
 
     if not data.get("active", False):
@@ -178,7 +181,8 @@ async def get_user_groups(token: str) -> list[str]:
     except ImportError:
         return []
     try:
-        groups = GroupsClient(authorizer=AccessTokenAuthorizer(token)).get_my_groups()
+        client = GroupsClient(authorizer=AccessTokenAuthorizer(token))
+        groups = await run_in_threadpool(client.get_my_groups)
         return [g["id"] for g in groups]
     except Exception as exc:
         logger.warning("Could not read Globus group memberships: %s", exc)
@@ -240,6 +244,11 @@ async def get_current_user(
         # The id_token JWT is what AmSC/MAG accept; fall back to the opaque token.
         access_token=request.headers.get("X-Id-Token") or token,
     )
+
+
+# Annotate handler parameters with this to receive the authenticated caller:
+#     async def handler(user: CurrentUser) -> ...:
+CurrentUser = Annotated[Researcher, Depends(get_current_user)]
 
 
 def auth_config() -> dict[str, Any]:
