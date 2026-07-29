@@ -35,7 +35,9 @@ from pydantic import BaseModel
 
 from academy.logging import init_logging
 
+from api.auth import router as auth_router
 from api.settings import router as settings_router
+from utils.auth import CurrentUser, assert_safe_configuration
 from models.schemas import ResearcherProfile, StressType
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
@@ -88,6 +90,9 @@ def _set_progress(
 async def lifespan(app: FastAPI):
     global _mining_handle, _rag_handle, _paper_store
 
+    # Fail before serving a single request if auth is off on a public interface.
+    assert_safe_configuration()
+
     scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
     db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
     app.state.bg_tasks: set[asyncio.Task] = set()
@@ -125,6 +130,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth_router)
 app.include_router(settings_router)
 
 
@@ -137,8 +143,6 @@ async def llm_not_configured_handler(request: Request, exc: LLMNotConfiguredErro
 
 
 class SearchRequest(BaseModel):
-    researcher_id: str = "researcher_001"
-    name: str
     plant_species: list[str] = []
     stress_types: list[str] = []
     phenotyping_methods: list[str] = []
@@ -156,12 +160,13 @@ class SearchRequest(BaseModel):
 
 class SynthesizeRequest(BaseModel):
     question: str
-    researcher_id: str | None = None
+    # Restrict retrieval to the caller's own collection instead of searching
+    # the whole shared corpus.
+    own_papers_only: bool = True
 
 
 class FeedbackRequest(BaseModel):
     proposal_id: str
-    researcher_id: str
     suggestion: str
     theme: str | None = None
     rating: int  # 1 = thumbs up, -1 = thumbs down
@@ -169,13 +174,12 @@ class FeedbackRequest(BaseModel):
 
 class AnchorSearchRequest(BaseModel):
     doi_or_title: str
-    researcher_id: str | None = None
+    own_papers_only: bool = True
     n_results: int = 10
 
 
 class KeywordExtractRequest(BaseModel):
     text: str
-    researcher_id: str
 
 
 class PreviewQueriesRequest(BaseModel):
@@ -197,12 +201,14 @@ Research description:
 
 
 @app.post("/api/extract_keywords")
-async def extract_keywords(req: KeywordExtractRequest) -> dict[str, list[str]]:
+async def extract_keywords(
+    req: KeywordExtractRequest, user: CurrentUser
+) -> dict[str, list[str]]:
     """Extract search-relevant keywords from a free-text research description."""
     if not req.text.strip():
         return {"keywords": []}
     try:
-        llm_kwargs = get_llm_config(req.researcher_id).for_reasoning()
+        llm_kwargs = get_llm_config(user.id).for_reasoning()
     except LLMNotConfiguredError:
         return {"keywords": []}
     try:
@@ -234,7 +240,9 @@ _OPEN_SOURCES = frozenset(
 
 
 @app.post("/api/preview_queries")
-async def preview_queries(req: PreviewQueriesRequest) -> list[dict[str, str]]:
+async def preview_queries(
+    req: PreviewQueriesRequest, user: CurrentUser
+) -> list[dict[str, str]]:
     """Return the actual query strings that would be sent to each source."""
     valid_stresses = [s for s in req.stress_types if s in StressType._value2member_map_]
     profile = ResearcherProfile(
@@ -276,17 +284,19 @@ def _n_proposals_for(papers_found: int) -> int:
     return max(2, min(10, papers_found // 25 + 2))
 
 
-async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposals: int = 5) -> list:
+async def _run_rag_synthesis(
+    researcher_id: str, req: SearchRequest, equipment: list[str], n_proposals: int = 5
+) -> list:
     """Index papers, synthesise proposals (optionally with critique), and assess feasibility."""
     rag_combos: list = []
     try:
-        _set_progress(req.researcher_id, "indexing", "Indexing papers into knowledge base…", 52)
+        _set_progress(researcher_id, "indexing", "Indexing papers into knowledge base…", 52)
         await asyncio.sleep(0)
         logger.info("Indexing papers into ChromaDB…")
         await _call(_rag_handle.index_new_papers())
 
         liked: list[dict] = (
-            _paper_store.get_liked_proposals(req.researcher_id) if _paper_store else []
+            _paper_store.get_liked_proposals(researcher_id) if _paper_store else []
         )
 
         if req.max_iterations > 0:
@@ -296,7 +306,7 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposa
             iter_note = "single-shot"
         critique_note = " + critique" if req.with_critique else ""
         _set_progress(
-            req.researcher_id, "synthesizing",
+            researcher_id, "synthesizing",
             f"Synthesising cross-paper proposals ({iter_note}{critique_note})…", 62,
         )
         await asyncio.sleep(0)
@@ -306,7 +316,7 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposa
         )
         rag_combos = await _call(
             _rag_handle.synthesize_combinations(
-                researcher_id=req.researcher_id,
+                researcher_id=researcher_id,
                 species=req.plant_species,
                 stresses=req.stress_types,
                 methods=req.phenotyping_methods,
@@ -319,13 +329,13 @@ async def _run_rag_synthesis(req: SearchRequest, equipment: list[str], n_proposa
             )
         )
         if rag_combos and equipment:
-            _set_progress(req.researcher_id, "feasibility", "Assessing equipment feasibility…", 90)
+            _set_progress(researcher_id, "feasibility", "Assessing equipment feasibility…", 90)
             await asyncio.sleep(0)
             rag_combos = await _call(
                 _rag_handle.assess_feasibility(
                     proposals=rag_combos,
                     available_equipment=equipment,
-                    researcher_id=req.researcher_id,
+                    researcher_id=researcher_id,
                 )
             )
         logger.info(
@@ -489,16 +499,17 @@ def _build_synthesis_paper_meta(rag_combos: list) -> dict[str, dict]:
     return result
 
 
-@app.get("/api/search/progress/{researcher_id}")
-async def search_progress(researcher_id: str) -> dict[str, Any]:
-    """Return the current search progress for a researcher (polled by the frontend modal)."""
+@app.get("/api/search/progress")
+async def search_progress(user: CurrentUser) -> dict[str, Any]:
+    """Return the caller's current search progress (polled by the frontend modal)."""
     return _search_progress.get(
-        researcher_id,
+        user.id,
         {"stage": "idle", "detail": "", "pct": 0, "done": False, "error": None, "ts": 0},
     )
 
 
 async def _rag_synthesis_or_cached(
+    researcher_id: str,
     req: SearchRequest,
     equipment: list[str],
     papers_found: int,
@@ -508,7 +519,7 @@ async def _rag_synthesis_or_cached(
     if _rag_handle is None:
         return []
     existing_proposals = (
-        _paper_store.get_last_proposals(req.researcher_id) if _paper_store else []
+        _paper_store.get_last_proposals(researcher_id) if _paper_store else []
     )
     if papers_found == 0 and existing_proposals:
         logger.info(
@@ -519,33 +530,34 @@ async def _rag_synthesis_or_cached(
     else:
         try:
             rag_combos = await asyncio.wait_for(
-                _run_rag_synthesis(req, equipment, n_proposals), timeout=600
+                _run_rag_synthesis(researcher_id, req, equipment, n_proposals), timeout=600
             )
             logger.info("RAG synthesis complete — %d proposals generated", len(rag_combos))
         except asyncio.TimeoutError:
             logger.warning("RAG synthesis timed out after 600 s — returning papers without proposals")
             rag_combos = []
-    _contradictions_store.pop(req.researcher_id, None)
-    _schedule_contradictions(req.researcher_id)
+    _contradictions_store.pop(researcher_id, None)
+    _schedule_contradictions(researcher_id)
     return rag_combos
 
 
 @app.post("/api/search", responses={503: {"description": "Mining agent not ready"}})
-async def search(req: SearchRequest) -> dict[str, Any]:
+async def search(req: SearchRequest, user: CurrentUser) -> dict[str, Any]:
     if _mining_handle is None:
         raise HTTPException(status_code=503, detail="Agent not ready")
 
+    researcher_id = user.id
     logger.info(
         "Search request — researcher=%s species=%s stresses=%s sources=%s",
-        req.researcher_id, req.plant_species, req.stress_types, req.source_targets,
+        researcher_id, req.plant_species, req.stress_types, req.source_targets,
     )
     equipment = _facility_equipment()
 
-    _set_progress(req.researcher_id, "registering", "Registering researcher profile…", 5)
+    _set_progress(researcher_id, "registering", "Registering researcher profile…", 5)
     await asyncio.sleep(0)  # yield — let queued GET polls see this stage
     await _call(_mining_handle.register_researcher(
-        researcher_id=req.researcher_id,
-        name=req.name,
+        researcher_id=researcher_id,
+        name=user.display_name,
         plant_species=req.plant_species,
         stress_types=req.stress_types,
         phenotyping_methods=req.phenotyping_methods,
@@ -560,12 +572,12 @@ async def search(req: SearchRequest) -> dict[str, Any]:
     ))
 
     n_sources = len(req.source_targets) if req.source_targets else "all"
-    _set_progress(req.researcher_id, "searching", f"Querying {n_sources} source(s) and scoring papers…", 12)
+    _set_progress(researcher_id, "searching", f"Querying {n_sources} source(s) and scoring papers…", 12)
     await asyncio.sleep(0)  # yield before the long trigger_search
     logger.info("Triggering search…")
-    search_result = await _call(_mining_handle.trigger_search(req.researcher_id))
+    search_result = await _call(_mining_handle.trigger_search(researcher_id))
 
-    _set_progress(req.researcher_id, "fetching", "Loading ranked papers…", 42)
+    _set_progress(researcher_id, "fetching", "Loading ranked papers…", 42)
     await asyncio.sleep(0)
     papers_found = search_result.get("papers_found", 0)
     logger.info(
@@ -574,21 +586,21 @@ async def search(req: SearchRequest) -> dict[str, Any]:
         f"{papers_found} new paper(s) found this run" if papers_found > 0
         else "no new papers found this run (all already in store or no results from sources)",
     )
-    papers, combos = _load_papers_and_combos(req.researcher_id)
+    papers, combos = _load_papers_and_combos(researcher_id)
     logger.info(
         "Loaded %d papers and %d per-paper hypotheses from store (cumulative across all searches)",
         len(papers), len(combos),
     )
 
     n_proposals = _n_proposals_for(papers_found)
-    rag_combos = await _rag_synthesis_or_cached(req, equipment, papers_found, n_proposals)
+    rag_combos = await _rag_synthesis_or_cached(researcher_id, req, equipment, papers_found, n_proposals)
 
     if _paper_store is not None:
         _paper_store.save_session(
             session_id=str(uuid.uuid4()),
-            researcher_id=req.researcher_id,
+            researcher_id=researcher_id,
             profile_snap={
-                "name": req.name,
+                "name": user.display_name,
                 "plant_species": req.plant_species,
                 "stress_types": req.stress_types,
                 "phenotyping_methods": req.phenotyping_methods,
@@ -603,7 +615,7 @@ async def search(req: SearchRequest) -> dict[str, Any]:
 
     n_props = len(rag_combos) + len(combos)
     _set_progress(
-        req.researcher_id, "done",
+        researcher_id, "done",
         f"Scan complete — {len(papers)} papers · {n_props} proposals",
         100, done=True,
     )
@@ -618,14 +630,14 @@ async def search(req: SearchRequest) -> dict[str, Any]:
 
 
 @app.post("/api/feedback", responses={503: {"description": "Store not ready"}, 422: {"description": "rating must be 1 or -1"}})
-async def feedback(req: FeedbackRequest) -> dict[str, str]:
+async def feedback(req: FeedbackRequest, user: CurrentUser) -> dict[str, str]:
     if _paper_store is None:
         raise HTTPException(status_code=503, detail="Store not ready")
     if req.rating not in (1, -1):
         raise HTTPException(status_code=422, detail="rating must be 1 or -1")
     _paper_store.save_rating(
         proposal_id=req.proposal_id,
-        researcher_id=req.researcher_id,
+        researcher_id=user.id,
         suggestion=req.suggestion,
         theme=req.theme,
         rating=req.rating,
@@ -633,23 +645,23 @@ async def feedback(req: FeedbackRequest) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/api/sessions/{researcher_id}")
-async def get_sessions(researcher_id: str, limit: int = 20) -> list[dict]:
+@app.get("/api/sessions")
+async def get_sessions(user: CurrentUser, limit: int = 20) -> list[dict]:
     if _paper_store is None:
         return []
-    return _paper_store.get_sessions(researcher_id, limit=limit)
+    return _paper_store.get_sessions(user.id, limit=limit)
 
 
-@app.get("/api/researcher/{researcher_id}/new-papers")
-async def get_new_papers(researcher_id: str) -> dict:
-    """Return papers added since the researcher's last login, then record this visit."""
+@app.get("/api/researcher/new-papers")
+async def get_new_papers(user: CurrentUser) -> dict:
+    """Return papers added since the caller's last login, then record this visit."""
     if _paper_store is None:
         return {"new_since": None, "new_count": 0, "new_papers": []}
-    last_login = _paper_store.get_last_login(researcher_id)
-    _paper_store.record_login(researcher_id)
+    last_login = _paper_store.get_last_login(user.id)
+    _paper_store.record_login(user.id)
     if last_login is None:
         return {"new_since": None, "new_count": 0, "new_papers": []}
-    new_papers = _paper_store.get_new_papers_since(researcher_id, last_login)
+    new_papers = _paper_store.get_new_papers_since(user.id, last_login)
     return {"new_since": last_login, "new_count": len(new_papers), "new_papers": new_papers}
 
 
@@ -658,11 +670,11 @@ _CRED_ICONS = {
 }
 
 
-@app.get("/api/contradictions/{researcher_id}")
-async def get_contradictions(researcher_id: str) -> list[dict]:
+@app.get("/api/contradictions")
+async def get_contradictions(user: CurrentUser) -> list[dict]:
     """Return all accumulated contradiction-detection results, newest first."""
-    db_results = _paper_store.get_all_contradictions(researcher_id) if _paper_store else []
-    in_memory  = _contradictions_store.get(researcher_id, [])
+    db_results = _paper_store.get_all_contradictions(user.id) if _paper_store else []
+    in_memory  = _contradictions_store.get(user.id, [])
     seen: set[str] = set()
     merged: list[dict] = []
     for c in in_memory + db_results:
@@ -673,13 +685,13 @@ async def get_contradictions(researcher_id: str) -> list[dict]:
     return merged
 
 
-@app.get("/api/researcher/{researcher_id}/results")
-async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
+@app.get("/api/researcher/results")
+async def get_researcher_results(user: CurrentUser) -> dict[str, Any]:
     """Return the last persisted papers and proposals for session restore."""
-    papers, combos = _load_papers_and_combos(researcher_id)
+    papers, combos = _load_papers_and_combos(user.id)
     if not papers:
         return {"papers": [], "combos": [], "rag_combos": [], "synthesis_paper_meta": {}}
-    rag_combos = _paper_store.get_last_proposals(researcher_id) if _paper_store else []
+    rag_combos = _paper_store.get_last_proposals(user.id) if _paper_store else []
     return {
         "papers": papers,
         "combos": combos,
@@ -688,40 +700,42 @@ async def get_researcher_results(researcher_id: str) -> dict[str, Any]:
     }
 
 
-@app.get("/api/researcher/{researcher_id}")
-async def get_researcher(researcher_id: str) -> dict | None:
-    """Return the stored profile for a researcher, or null if not found."""
+@app.get("/api/researcher")
+async def get_researcher(user: CurrentUser) -> dict | None:
+    """Return the caller's stored profile, or null if they have none yet."""
     if _mining_handle is not None:
         try:
-            result = await _call(_mining_handle.get_researcher(researcher_id))
+            result = await _call(_mining_handle.get_researcher(user.id))
             if result is not None:
                 return result
         except Exception:
             pass
     # Fall back to DB for returning users whose profile isn't in agent memory yet.
     if _paper_store is not None:
-        return _paper_store.load_profile(researcher_id)
+        return _paper_store.load_profile(user.id)
     return None
 
 
 @app.post("/api/anchor_search", responses={503: {"description": "RAG agent not ready"}})
-async def anchor_search(req: AnchorSearchRequest) -> list[dict]:
+async def anchor_search(req: AnchorSearchRequest, user: CurrentUser) -> list[dict]:
     if _rag_handle is None:
         raise HTTPException(status_code=503, detail="RAG agent not ready")
     return await _call(
         _rag_handle.find_similar_to_anchor(
             doi_or_title=req.doi_or_title,
-            researcher_id=req.researcher_id,
+            researcher_id=user.id if req.own_papers_only else None,
             n_results=req.n_results,
         )
     )
 
 
 @app.post("/api/rag/synthesize", responses={503: {"description": "RAG agent not ready"}})
-async def rag_synthesize(req: SynthesizeRequest) -> dict[str, str]:
+async def rag_synthesize(req: SynthesizeRequest, user: CurrentUser) -> dict[str, str]:
     if _rag_handle is None:
         raise HTTPException(status_code=503, detail="RAG agent not ready")
-    answer = await _call(_rag_handle.synthesize(req.question, req.researcher_id))
+    answer = await _call(
+        _rag_handle.synthesize(req.question, user.id, own_papers_only=req.own_papers_only)
+    )
     return {"answer": answer}
 
 

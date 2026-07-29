@@ -6,6 +6,10 @@ __pycache__/
 venv/
 
 
+# Secrets — .env holds real credentials; .env.example is the tracked template
+.env
+.env.local
+
 # Runtime data
 *.db
 *.db-shm

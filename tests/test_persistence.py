@@ -144,6 +144,44 @@ def test_load_papers_only_returns_own_researcher(store):
     assert len(store.load_papers("r2")) == 1
 
 
+def test_same_paper_collected_by_two_researchers_is_not_stolen(store):
+    """Both researchers keep the paper, and neither inherits the other's scores.
+
+    paper_id is assigned by the source (PubMed id, arXiv id, DOI), so it is
+    identical for everyone who finds the same paper.
+    """
+    r1 = _scored_paper("shared")
+    r1.relevance.overall = 0.9
+    r1.suggested_combinations = ["r1 idea"]
+    store.save_paper(r1, "r1")
+
+    r2 = _scored_paper("shared")
+    r2.relevance.overall = 0.2
+    r2.suggested_combinations = ["r2 idea"]
+    store.save_paper(r2, "r2")
+
+    r1_papers = store.load_papers("r1")
+    r2_papers = store.load_papers("r2")
+    assert len(r1_papers) == 1, "r1 lost the paper when r2 collected it"
+    assert len(r2_papers) == 1
+    assert r1_papers[0].relevance.overall == pytest.approx(0.9)
+    assert r2_papers[0].relevance.overall == pytest.approx(0.2)
+    assert r1_papers[0].suggested_combinations == ["r1 idea"]
+    assert r2_papers[0].suggested_combinations == ["r2 idea"]
+
+    # The bibliographic record itself is stored once, not per researcher.
+    n_rows = store._conn.execute("SELECT COUNT(*) FROM papers").fetchone()[0]
+    assert n_rows == 1
+
+
+def test_shared_corpus_is_indexed_once_for_all_researchers(store):
+    store.save_paper(_scored_paper("shared"), "r1")
+    store.save_paper(_scored_paper("shared"), "r2")
+    assert len(store.get_unindexed_papers()) == 1
+    store.mark_indexed(["shared"])
+    assert store.get_unindexed_papers() == []
+
+
 # ---------------------------------------------------------------------------
 # known_dois / known_paper_ids
 # ---------------------------------------------------------------------------
@@ -179,7 +217,7 @@ def test_get_unindexed_papers_returns_new_papers(store):
     store.save_paper(_scored_paper("p1"), "r1")
     store.save_paper(_scored_paper("p2", doi=None), "r1")
     unindexed = store.get_unindexed_papers()
-    ids = {row[0] for row in unindexed}   # row = (paper_id, researcher_id, abstract, meta)
+    ids = {row[0] for row in unindexed}   # row = (paper_id, abstract, meta)
     assert "p1" in ids
     assert "p2" in ids
 

@@ -54,25 +54,41 @@ class PaperStore:
                 data          TEXT NOT NULL
             );
 
+            -- Shared corpus: public bibliographic records, owned by nobody.
+            -- Credibility lives here because it is assessed from the paper
+            -- alone (journal, source, citation count) and is the same for
+            -- every reader.
             CREATE TABLE IF NOT EXISTS papers (
                 paper_id          TEXT PRIMARY KEY,
-                researcher_id     TEXT NOT NULL,
                 doi               TEXT,
                 data              TEXT NOT NULL,
+                credibility       TEXT NOT NULL DEFAULT 'preliminary',
                 rag_indexed       INTEGER NOT NULL DEFAULT 0,
                 full_text_indexed INTEGER NOT NULL DEFAULT 0,
-                added_at          TEXT NOT NULL DEFAULT (datetime('now'))
+                first_seen_at     TEXT NOT NULL DEFAULT (datetime('now'))
             );
-            CREATE INDEX IF NOT EXISTS idx_papers_researcher
-                ON papers (researcher_id);
             CREATE INDEX IF NOT EXISTS idx_papers_doi
                 ON papers (doi);
             CREATE INDEX IF NOT EXISTS idx_papers_rag
                 ON papers (rag_indexed);
             CREATE INDEX IF NOT EXISTS idx_papers_full_text
                 ON papers (full_text_indexed);
-            CREATE INDEX IF NOT EXISTS idx_papers_added_at
-                ON papers (researcher_id, added_at);
+
+            -- Private: which researcher collected which paper, and how it
+            -- scored against *their* profile. The association alone reveals a
+            -- research direction, so it never leaves the owning researcher.
+            CREATE TABLE IF NOT EXISTS user_papers (
+                researcher_id          TEXT NOT NULL,
+                paper_id               TEXT NOT NULL,
+                added_at               TEXT NOT NULL DEFAULT (datetime('now')),
+                relevance              TEXT NOT NULL DEFAULT '{}',
+                suggested_combinations TEXT NOT NULL DEFAULT '[]',
+                source_queries         TEXT NOT NULL DEFAULT '[]',
+                PRIMARY KEY (researcher_id, paper_id),
+                FOREIGN KEY (paper_id) REFERENCES papers(paper_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_papers_added
+                ON user_papers (researcher_id, added_at);
 
             CREATE TABLE IF NOT EXISTS chunks (
                 chunk_id    TEXT PRIMARY KEY,
@@ -101,12 +117,13 @@ class PaperStore:
             );
 
             CREATE TABLE IF NOT EXISTS sessions (
-                session_id    TEXT PRIMARY KEY,
-                researcher_id TEXT NOT NULL,
-                timestamp     TEXT NOT NULL,
-                profile_snap  TEXT NOT NULL,
-                n_papers      INTEGER NOT NULL DEFAULT 0,
-                n_proposals   INTEGER NOT NULL DEFAULT 0
+                session_id     TEXT PRIMARY KEY,
+                researcher_id  TEXT NOT NULL,
+                timestamp      TEXT NOT NULL,
+                profile_snap   TEXT NOT NULL,
+                n_papers       INTEGER NOT NULL DEFAULT 0,
+                n_proposals    INTEGER NOT NULL DEFAULT 0,
+                proposals_snap TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_sessions_researcher
                 ON sessions (researcher_id, timestamp);
@@ -136,18 +153,14 @@ class PaperStore:
         self._migrate()
 
     def _migrate(self) -> None:
-        """Apply forward-compatible schema migrations for existing databases."""
-        cols = {row[1] for row in self._conn.execute("PRAGMA table_info(papers)")}
-        if "added_at" not in cols:
-            self._conn.execute(
-                "ALTER TABLE papers ADD COLUMN added_at TEXT NOT NULL DEFAULT (datetime('now'))"
-            )
-            self._conn.commit()
-        if "full_text_indexed" not in cols:
-            self._conn.execute(
-                "ALTER TABLE papers ADD COLUMN full_text_indexed INTEGER NOT NULL DEFAULT 0"
-            )
-            self._conn.commit()
+        """Apply forward-compatible schema migrations for existing databases.
+
+        The former ``papers.added_at`` / ``papers.full_text_indexed`` migrations
+        were dropped when the paper tables were split: ``added_at`` is now a
+        column of ``user_papers`` (it records when *a researcher* collected the
+        paper, not when the corpus first saw it), and ``full_text_indexed`` is
+        part of the ``papers`` DDL above.
+        """
         sess_cols = {row[1] for row in self._conn.execute("PRAGMA table_info(sessions)")}
         if "proposals_snap" not in sess_cols:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN proposals_snap TEXT")
@@ -217,15 +230,20 @@ class PaperStore:
     # ------------------------------------------------------------------
 
     def save_paper(self, scored: ScoredPaper, researcher_id: str) -> None:
-        """Insert or replace a scored paper (preserves rag_indexed flag and added_at)."""
+        """Record a scored paper: bibliographic data shared, scoring per-researcher.
+
+        Two researchers who find the same paper share one ``papers`` row and
+        keep their own ``user_papers`` row, so neither overwrites the other's
+        relevance scores or loses the paper from their collection.
+        """
         paper = scored.paper
         existing = self._conn.execute(
-            "SELECT rag_indexed, full_text_indexed, added_at FROM papers WHERE paper_id = ?",
+            "SELECT rag_indexed, full_text_indexed, first_seen_at FROM papers WHERE paper_id = ?",
             (paper.paper_id,),
         ).fetchone()
         rag_indexed       = existing["rag_indexed"]       if existing else 0
         full_text_indexed = existing["full_text_indexed"] if existing else 0
-        added_at          = existing["added_at"]          if existing else datetime.now(timezone.utc).isoformat()
+        first_seen_at     = existing["first_seen_at"]     if existing else datetime.now(timezone.utc).isoformat()
 
         pub = None
         if paper.published_date:
@@ -245,60 +263,88 @@ class PaperStore:
             "keywords": paper.keywords,
             "is_open_access": paper.is_open_access,
             "citation_count": paper.citation_count,
-            "relevance": {
-                "overall": scored.relevance.overall,
-                "species_match": scored.relevance.species_match,
-                "stress_match": scored.relevance.stress_match,
-                "method_match": scored.relevance.method_match,
-                "recency": scored.relevance.recency,
-                "credibility": scored.relevance.credibility,
-                "novelty": scored.relevance.novelty,
-            },
-            "credibility": scored.credibility.value,
-            "suggested_combinations": scored.suggested_combinations,
-            "source_queries": scored.source_queries,
         }
         self._conn.execute(
             """INSERT OR REPLACE INTO papers
-               (paper_id, researcher_id, doi, data, rag_indexed, full_text_indexed, added_at)
+               (paper_id, doi, data, credibility, rag_indexed, full_text_indexed, first_seen_at)
                VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (paper.paper_id, researcher_id, paper.doi, json.dumps(data),
-             rag_indexed, full_text_indexed, added_at),
+            (paper.paper_id, paper.doi, json.dumps(data), scored.credibility.value,
+             rag_indexed, full_text_indexed, first_seen_at),
+        )
+
+        row = self._conn.execute(
+            "SELECT added_at FROM user_papers WHERE researcher_id = ? AND paper_id = ?",
+            (researcher_id, paper.paper_id),
+        ).fetchone()
+        added_at = row["added_at"] if row else datetime.now(timezone.utc).isoformat()
+        relevance = {
+            "overall": scored.relevance.overall,
+            "species_match": scored.relevance.species_match,
+            "stress_match": scored.relevance.stress_match,
+            "method_match": scored.relevance.method_match,
+            "recency": scored.relevance.recency,
+            "credibility": scored.relevance.credibility,
+            "novelty": scored.relevance.novelty,
+        }
+        self._conn.execute(
+            """INSERT OR REPLACE INTO user_papers
+               (researcher_id, paper_id, added_at, relevance, suggested_combinations, source_queries)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (researcher_id, paper.paper_id, added_at, json.dumps(relevance),
+             json.dumps(scored.suggested_combinations), json.dumps(scored.source_queries)),
         )
         self._conn.commit()
 
+    def _scored_from_join(self, row: sqlite3.Row) -> ScoredPaper:
+        """Rebuild a ScoredPaper from a papers ⋈ user_papers row."""
+        d = json.loads(row["data"])
+        d["credibility"] = row["credibility"]
+        d["relevance"] = json.loads(row["relevance"])
+        d["suggested_combinations"] = json.loads(row["suggested_combinations"])
+        d["source_queries"] = json.loads(row["source_queries"])
+        return _row_to_scored(d)
+
     def load_papers(self, researcher_id: str) -> list[ScoredPaper]:
         rows = self._conn.execute(
-            "SELECT data FROM papers WHERE researcher_id = ?", (researcher_id,)
+            """SELECT p.data, p.credibility, u.relevance, u.suggested_combinations, u.source_queries
+               FROM user_papers u JOIN papers p USING (paper_id)
+               WHERE u.researcher_id = ?""",
+            (researcher_id,),
         ).fetchall()
-        return [_row_to_scored(json.loads(row["data"])) for row in rows]
+        return [self._scored_from_join(row) for row in rows]
 
     def get_added_at_map(self, researcher_id: str) -> dict[str, str]:
-        """Return {paper_id: added_at} for all papers belonging to a researcher."""
+        """Return {paper_id: added_at} for all papers collected by a researcher."""
         rows = self._conn.execute(
-            "SELECT paper_id, added_at FROM papers WHERE researcher_id = ?", (researcher_id,)
+            "SELECT paper_id, added_at FROM user_papers WHERE researcher_id = ?",
+            (researcher_id,),
         ).fetchall()
         return {row["paper_id"]: row["added_at"] for row in rows}
 
     def known_dois(self, researcher_id: str) -> set[str]:
         rows = self._conn.execute(
-            "SELECT doi FROM papers WHERE researcher_id = ? AND doi IS NOT NULL",
+            """SELECT p.doi FROM user_papers u JOIN papers p USING (paper_id)
+               WHERE u.researcher_id = ? AND p.doi IS NOT NULL""",
             (researcher_id,),
         ).fetchall()
         return {row["doi"] for row in rows}
 
     def known_paper_ids(self, researcher_id: str) -> set[str]:
-        """Return all paper_ids stored for a researcher (fallback dedup key for DOI-less papers)."""
+        """Return all paper_ids collected by a researcher (fallback dedup key for DOI-less papers)."""
         rows = self._conn.execute(
-            "SELECT paper_id FROM papers WHERE researcher_id = ?",
+            "SELECT paper_id FROM user_papers WHERE researcher_id = ?",
             (researcher_id,),
         ).fetchall()
         return {row["paper_id"] for row in rows}
 
-    def get_unindexed_papers(self) -> list[tuple[str, str, str, dict]]:
-        """Return (paper_id, researcher_id, abstract, metadata) for un-indexed papers."""
+    def get_unindexed_papers(self) -> list[tuple[str, str, dict]]:
+        """Return (paper_id, abstract, metadata) for un-indexed corpus papers.
+
+        Corpus-wide by design: indexing is shared work, and the vector store
+        holds no researcher association.
+        """
         rows = self._conn.execute(
-            "SELECT paper_id, researcher_id, data FROM papers WHERE rag_indexed = 0"
+            "SELECT paper_id, data FROM papers WHERE rag_indexed = 0"
         ).fetchall()
         result = []
         for row in rows:
@@ -309,16 +355,16 @@ class PaperStore:
                     "paper_id": row["paper_id"],
                     "title": d.get("title", ""),
                     "journal": d.get("journal") or "",
-                    "researcher_id": row["researcher_id"],
                     "doi": d.get("doi") or "",
                 }
-                result.append((row["paper_id"], row["researcher_id"], abstract, meta))
+                result.append((row["paper_id"], abstract, meta))
         return result
 
     def get_new_papers_since(self, researcher_id: str, since: str) -> list[dict[str, Any]]:
-        """Return paper data rows added after *since* (ISO timestamp) for a researcher."""
+        """Return paper data rows the researcher collected after *since* (ISO timestamp)."""
         rows = self._conn.execute(
-            "SELECT data, added_at FROM papers WHERE researcher_id = ? AND added_at > ? ORDER BY added_at DESC",
+            """SELECT p.data, u.added_at FROM user_papers u JOIN papers p USING (paper_id)
+               WHERE u.researcher_id = ? AND u.added_at > ? ORDER BY u.added_at DESC""",
             (researcher_id, since),
         ).fetchall()
         result = []
@@ -361,17 +407,14 @@ class PaperStore:
     # Full-text chunking (Augmentation B)
     # ------------------------------------------------------------------
 
-    def get_papers_needing_chunking(self) -> list[tuple[str, str, dict]]:
-        """Return (paper_id, researcher_id, data_dict) for abstract-indexed papers
+    def get_papers_needing_chunking(self) -> list[tuple[str, dict]]:
+        """Return (paper_id, data_dict) for abstract-indexed papers
         that have not yet been full-text chunked."""
         rows = self._conn.execute(
-            "SELECT paper_id, researcher_id, data FROM papers "
+            "SELECT paper_id, data FROM papers "
             "WHERE rag_indexed = 1 AND full_text_indexed = 0"
         ).fetchall()
-        return [
-            (row["paper_id"], row["researcher_id"], json.loads(row["data"]))
-            for row in rows
-        ]
+        return [(row["paper_id"], json.loads(row["data"])) for row in rows]
 
     def mark_full_text_indexed(self, paper_ids: list[str]) -> None:
         self._conn.executemany(

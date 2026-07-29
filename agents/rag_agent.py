@@ -273,7 +273,7 @@ class RAGAgent(Agent):
         if unindexed:
             items = [
                 (paper_id, abstract, {**meta, "paper_id": paper_id})
-                for paper_id, _researcher_id, abstract, meta in unindexed
+                for paper_id, abstract, meta in unindexed
             ]
             self._rag.add_papers_batch(items)
             paper_ids = [paper_id for paper_id, *_ in unindexed]
@@ -286,11 +286,11 @@ class RAGAgent(Agent):
         chunk_chroma_items: list[tuple] = []
 
         chunk_results = await asyncio.gather(
-            *[self._fetch_chunks_for_paper(pid, rid, data) for pid, rid, data in needing],
+            *[self._fetch_chunks_for_paper(pid, data) for pid, data in needing],
             return_exceptions=True,
         )
 
-        for (paper_id, researcher_id, data), result in zip(needing, chunk_results):
+        for (paper_id, data), result in zip(needing, chunk_results):
             if isinstance(result, Exception):
                 logger.warning("Chunk fetch failed for %s: %s", paper_id, result)
                 continue
@@ -317,9 +317,8 @@ class RAGAgent(Agent):
             self._store.save_chunks(result)
 
             meta_base = {
-                "paper_id":      paper_id,
-                "researcher_id": researcher_id,
-                "title":         data.get("title", ""),
+                "paper_id": paper_id,
+                "title":    data.get("title", ""),
             }
             for chunk in result:
                 chunk_chroma_items.append((
@@ -344,7 +343,7 @@ class RAGAgent(Agent):
         }
 
     async def _fetch_chunks_for_paper(
-        self, paper_id: str, researcher_id: str, data: dict
+        self, paper_id: str, data: dict
     ) -> list[dict] | None:
         """Fetch and chunk full text for one paper. Returns None for paywalled papers."""
         from utils.chunker import fetch_and_chunk_paper
@@ -392,6 +391,24 @@ class RAGAgent(Agent):
             )
         return results
 
+    def _collection_filter(self, researcher_id: str | None) -> dict | None:
+        """Restrict a vector query to the papers *researcher_id* has collected.
+
+        The vector store holds no researcher association — embeddings are a
+        property of the text, not of who read it — so scoping is resolved from
+        user_papers and applied as a paper_id filter. Returns None to search
+        the whole shared corpus.
+        """
+        if not researcher_id:
+            return None
+        paper_ids = self._store.known_paper_ids(researcher_id)
+        if not paper_ids:
+            # No collection yet: match nothing rather than silently falling back
+            # to a corpus-wide search. An equality filter on an impossible value
+            # is used because ChromaDB rejects an empty $in list.
+            return {"paper_id": "__no_papers__"}
+        return {"paper_id": {"$in": sorted(paper_ids)}}
+
     def _rag_query(
         self, text: str, n_results: int, researcher_id: str | None = None
     ) -> list[dict]:
@@ -400,7 +417,7 @@ class RAGAgent(Agent):
         Requests 3× from ChromaDB to account for multiple chunks per paper,
         then keeps the highest-ranked chunk per paper up to n_results.
         """
-        where = {"researcher_id": researcher_id} if researcher_id else None
+        where = self._collection_filter(researcher_id)
         raw = self._rag.query(text, n_results=min(n_results * 3, 100), where=where)
         seen: set[str] = set()
         hits: list[dict] = []
@@ -1144,7 +1161,7 @@ class RAGAgent(Agent):
             }
 
     async def _contradiction_pass(
-        self, query: str, n_papers: int, where: dict, llm_r: dict
+        self, query: str, n_papers: int, where: dict | None, llm_r: dict
     ) -> list[dict]:
         """Run one contradiction-detection LLM call over papers matching ``query``."""
         hits = self._rag.query(query, n_results=n_papers, where=where)
@@ -1222,7 +1239,7 @@ class RAGAgent(Agent):
             + profile.get("expertise_keywords", [])[:4]
         ) or ["plant biology stress response"]
         queries  = (terms * n_passes)[:n_passes]
-        where    = {"researcher_id": researcher_id}
+        where    = self._collection_filter(researcher_id)
 
         try:
             llm_r = get_llm_config(researcher_id).for_reasoning()
@@ -1318,11 +1335,20 @@ class RAGAgent(Agent):
             return ""
 
     @action
-    async def synthesize(self, question: str, researcher_id: str | None = None) -> str:
+    async def synthesize(
+        self,
+        question: str,
+        researcher_id: str | None = None,
+        own_papers_only: bool = True,
+    ) -> str:
         """Answer a free-form question using RAG + LangGraph ReAct.
 
         Builds a ReAct agent with a ``search_knowledge_base`` tool that
         queries ChromaDB, then streams the final answer back.
+
+        ``researcher_id`` identifies the caller and always resolves their LLM
+        credentials; ``own_papers_only`` decides whether retrieval is limited
+        to their collection or spans the shared corpus.
         """
         if not researcher_id:
             return "Please provide a researcher_id to use the synthesis feature."
@@ -1331,11 +1357,12 @@ class RAGAgent(Agent):
         except LLMNotConfiguredError:
             return "LLM not configured. Please set up a provider in Settings before using synthesis."
 
+        scope = researcher_id if own_papers_only else None
         try:
-            return await self._run_react(question, researcher_id, llm_r)
+            return await self._run_react(question, scope, llm_r)
         except Exception as exc:
             logger.warning("ReAct synthesis failed, falling back to direct RAG: %s", exc)
-            return await self._fallback_answer(question, researcher_id, llm_r)
+            return await self._fallback_answer(question, scope, llm_r)
 
     @action
     async def get_rag_status(self) -> dict[str, Any]:

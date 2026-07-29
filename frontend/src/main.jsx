@@ -7,6 +7,8 @@ import PropTypes from "prop-types";
 import Dashboard from "./Dashboard.jsx";
 import LandingPage from "./LandingPage.jsx";
 import Settings from "./Settings.jsx";
+import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
+import { apiJson } from "./api.js";
 
 // ── Priority config ──────────────────────────────────────────────────────────
 
@@ -301,43 +303,58 @@ ChatView.propTypes = {
 
 function App() {
   const [mode, setMode] = useState(null); // null | "setup" | "dashboard" | "chat"
-  const [researcher, setResearcher] = useState(null);
   const [priorities, setPriorities] = useState(DEFAULT_PRIORITIES);
   const [scanSettings, setScanSettings] = useState(DEFAULT_SCAN_SETTINGS);
   const [showSettings, setShowSettings] = useState(false);
   const [showLLMSettings, setShowLLMSettings] = useState(false);
   const [loginPending, setLoginPending] = useState(false);
+  const auth = useAuth();
 
-  const handleLogin = async (name) => {
-    if (!name) { setResearcher(null); setMode(null); return; }
-    const id = name.toLowerCase().replaceAll(/\s+/g, "_");
+  // The researcher identity is whatever the backend resolved from the
+  // credentials — never something this app chose.
+  const researcher = auth.user
+    ? { id: auth.user.id, name: auth.user.display_name }
+    : null;
+
+  // Once an identity exists, restore that researcher's saved state.
+  const enterFor = async (id) => {
     setLoginPending(true);
-    // Check if the backend still knows this researcher (profile absent after clean.sh)
-    let backendKnown = false;
-    try {
-      const r = await fetch(`/api/researcher/${id}`);
-      backendKnown = r.ok && (await r.json()) !== null;
-    } catch { /* network error — fall back to treating as new */ }
-
-    // Check if the user has an LLM provider configured; auto-open if not.
-    let llmConfigured = false;
-    try {
-      const r = await fetch(`/api/settings/active?researcher_id=${encodeURIComponent(id)}`);
-      if (r.ok) { const d = await r.json(); llmConfigured = d.configured === true; }
-    } catch { /* ignore — don't block login */ }
-
+    // Does the backend still know this researcher? (profile absent after clean.sh)
+    const profile = await apiJson("/api/researcher");
+    const backendKnown = profile !== null;
+    // Auto-open the key dialog when no LLM provider is configured yet.
+    const active = await apiJson("/api/settings/active", {}, { configured: false });
     setLoginPending(false);
+
     const savedPriorities = backendKnown ? loadPriorities(id) : null;
     const savedScan       = backendKnown ? loadScanSettings(id) : null;
-    setResearcher({ name, id });
     if (savedScan) setScanSettings(savedScan);
-    if (!llmConfigured) setShowLLMSettings(true);
+    if (active?.configured !== true) setShowLLMSettings(true);
     if (savedPriorities) {
       setPriorities(savedPriorities);
       setMode("dashboard");
     } else {
       setMode("setup");
     }
+  };
+
+  // Both sign-in paths end the same way — an identity appearing on the auth
+  // context — so entry is driven from here rather than from a click handler.
+  // Globus in particular completes by redirect, with no handler to return to.
+  useEffect(() => {
+    if (auth.isAuthenticated && mode === null && !loginPending) {
+      enterFor(auth.user.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.isAuthenticated]);
+
+  const handleDevLogin = (name) => auth.devLogin(name);
+
+  const handleLogout = async () => {
+    await auth.logout();
+    setMode(null);
+    setPriorities(DEFAULT_PRIORITIES);
+    setScanSettings(DEFAULT_SCAN_SETTINGS);
   };
 
   const handleSaveSettings = (prefs, scan) => {
@@ -361,7 +378,7 @@ function App() {
       <>
         <PrioritySetupStep name={researcher.name} onSave={handleSaveSettings} />
         {showLLMSettings && (
-          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
+          <Settings onClose={closeLLMSettings} />
         )}
       </>
     );
@@ -370,7 +387,7 @@ function App() {
     return (
       <>
         <Dashboard
-          onBack={() => { setResearcher(null); setMode(null); }}
+          onBack={handleLogout}
           researcherName={researcher.name}
           researcherId={researcher.id}
           priorities={priorities}
@@ -387,7 +404,7 @@ function App() {
           />
         )}
         {showLLMSettings && (
-          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
+          <Settings onClose={closeLLMSettings} />
         )}
       </>
     );
@@ -410,17 +427,41 @@ function App() {
           />
         )}
         {showLLMSettings && (
-          <Settings researcherId={researcher.id} onClose={closeLLMSettings} />
+          <Settings onClose={closeLLMSettings} />
         )}
       </>
     );
 
-  return <LandingPage onLogin={handleLogin} pending={loginPending} />;
+  if (auth.isLoading) return <SplashScreen />;
+
+  return (
+    <LandingPage
+      onLogin={handleDevLogin}
+      onGlobusLogin={auth.login}
+      globusEnabled={auth.isEnabled}
+      pending={loginPending}
+      error={auth.error}
+    />
+  );
+}
+
+function SplashScreen() {
+  return (
+    <div style={{
+      minHeight: "100vh", background: "#0c0f1a", color: "#64748b",
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontFamily: "'IBM Plex Sans', system-ui, sans-serif", fontSize: 14,
+    }}>
+      Signing in…
+    </div>
+  );
 }
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <App />
+    <AuthProvider>
+      <App />
+    </AuthProvider>
   </StrictMode>
 );
 

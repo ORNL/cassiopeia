@@ -3,6 +3,7 @@
 
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
+import { apiFetch, postJson } from "./api.js";
 
 // Decode HTML entities (e.g. &lt;i&gt; → <i>) then strip all tags to plain text.
 // Paper titles from Europe PMC often contain HTML markup for species names.
@@ -1008,11 +1009,7 @@ SessionHistory.propTypes = { sessions: PropTypes.array };
 // ─────────────────────────────────────────────────
 
 async function fetchSearchResult(body) {
-  const res = await fetch("/api/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  const res = await postJson("/api/search", body);
   if (!res.ok) {
     const err = await res.json().catch(() => ({ detail: res.statusText }));
     throw new Error(err.detail || "Search failed");
@@ -1079,21 +1076,19 @@ function getInitialTab() {
   return new URLSearchParams(globalThis.location.search).get("tab") || "profile";
 }
 
-async function fetchSessions(researcherId, setSessions) {
+async function fetchSessions(setSessions) {
   try {
-    const r = await fetch(`/api/sessions/${researcherId}`);
+    const r = await apiFetch("/api/sessions");
     if (r.ok) setSessions(await r.json());
   } catch { /* silent */ }
 }
 
-async function runAnchorSearch(researcherId, anchorInput, setAnchorLoading, setAnchorResults) {
+async function runAnchorSearch(anchorInput, setAnchorLoading, setAnchorResults) {
   if (!anchorInput.trim()) return;
   setAnchorLoading(true);
   try {
-    const res = await fetch("/api/anchor_search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ doi_or_title: anchorInput.trim(), researcher_id: researcherId, n_results: 8 }),
+    const res = await postJson("/api/anchor_search", {
+      doi_or_title: anchorInput.trim(), n_results: 8,
     });
     if (res.ok) setAnchorResults(await res.json());
   } catch {
@@ -1113,25 +1108,20 @@ async function runExtractKeywords(researchPrompt, kwLoading, setKwLoading, setEx
   }
 }
 
-async function submitRating(researcherId, proposal, rating) {
+async function submitRating(proposal, rating) {
   try {
-    await fetch("/api/feedback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        proposal_id: proposal.proposal_id,
-        researcher_id: researcherId,
-        suggestion: proposal.suggestion,
-        theme: proposal.theme || null,
-        rating,
-      }),
+    await postJson("/api/feedback", {
+      proposal_id: proposal.proposal_id,
+      suggestion: proposal.suggestion,
+      theme: proposal.theme || null,
+      rating,
     });
   } catch { /* fire-and-forget */ }
 }
 
-async function loadRestoredContradictions(researcherId, setContradictions) {
+async function loadRestoredContradictions(setContradictions) {
   try {
-    const r = await fetch(`/api/contradictions/${researcherId}`);
+    const r = await apiFetch("/api/contradictions");
     if (r.ok) {
       const data = await r.json();
       if (data.length > 0) setContradictions(data);
@@ -1139,11 +1129,11 @@ async function loadRestoredContradictions(researcherId, setContradictions) {
   } catch { /* silent */ }
 }
 
-function pollForContradictions(researcherId, setContradictions) {
+function pollForContradictions(setContradictions) {
   let attempts = 0;
   const pollId = setInterval(() => {
     attempts++;
-    fetch(`/api/contradictions/${researcherId}`)
+    apiFetch("/api/contradictions")
       .then((r) => r.ok ? r.json() : [])
       .then((c) => {
         if (c.length > 0) { setContradictions(c); clearInterval(pollId); }
@@ -1162,11 +1152,7 @@ function applyStoredProfile(profile, setSpecies, setStresses, setSources, setTim
 }
 
 async function fetchKeywords(text) {
-  const res = await fetch("/api/extract_keywords", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
-  });
+  const res = await postJson("/api/extract_keywords", { text });
   if (!res.ok) return [];
   return (await res.json()).keywords || [];
 }
@@ -1182,16 +1168,16 @@ function startAgentPolling(setter) {
   return setInterval(poll, 10_000);
 }
 
-async function loadAndApplyProfile(researcherId, setSpecies, setStresses, setSources, setTimeRange) {
+async function loadAndApplyProfile(setSpecies, setStresses, setSources, setTimeRange) {
   try {
-    const r = await fetch(`/api/researcher/${researcherId}`);
+    const r = await apiFetch("/api/researcher");
     if (r.ok) applyStoredProfile(await r.json(), setSpecies, setStresses, setSources, setTimeRange);
   } catch { /* silent */ }
 }
 
-async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos) {
+async function loadRestoredResults(setPapers, setSynthesisPaperMeta, setCombos, setRagCombos) {
   try {
-    const r = await fetch(`/api/researcher/${researcherId}/results`);
+    const r = await apiFetch("/api/researcher/results");
     if (!r.ok) return;
     const d = await r.json();
     if (d?.papers?.length > 0) {
@@ -1203,9 +1189,9 @@ async function loadRestoredResults(researcherId, setPapers, setSynthesisPaperMet
   } catch { /* silent */ }
 }
 
-async function loadNewPapers(researcherId, setNewPaperIds, setNewSince) {
+async function loadNewPapers(setNewPaperIds, setNewSince) {
   try {
-    const r = await fetch(`/api/researcher/${researcherId}/new-papers`);
+    const r = await apiFetch("/api/researcher/new-papers");
     if (!r.ok) return;
     const d = await r.json();
     if (d?.new_count > 0) {
@@ -1246,7 +1232,7 @@ function stageIcon(stageKey, currentStage, isDone) {
   return { icon: "○", color: "#334155" };
 }
 
-function ProgressModal({ researcherId, searching, onDismiss }) {
+function ProgressModal({ searching, onDismiss }) {
   const [progress, setProgress] = useState(null);
 
   // isDone: backend confirmed done, OR parent knows the scan finished (fallback for blocked polls)
@@ -1256,14 +1242,14 @@ function ProgressModal({ researcherId, searching, onDismiss }) {
     if (isDone) return;
     const poll = async () => {
       try {
-        const res = await fetch(`/api/search/progress/${researcherId}`);
+        const res = await apiFetch("/api/search/progress");
         if (res.ok) setProgress(await res.json());
       } catch { /* silent */ }
     };
     poll();
     const id = setInterval(poll, 600);
     return () => clearInterval(id);
-  }, [researcherId, isDone]);
+  }, [isDone]);
 
   useEffect(() => {
     if (!isDone) return;
@@ -1307,7 +1293,6 @@ function ProgressModal({ researcherId, searching, onDismiss }) {
 }
 
 ProgressModal.propTypes = {
-  researcherId: PropTypes.string.isRequired,
   searching:    PropTypes.bool.isRequired,
   onDismiss:    PropTypes.func.isRequired,
 };
@@ -1316,7 +1301,7 @@ ProgressModal.propTypes = {
 // Main Dashboard
 // ─────────────────────────────────────────────────
 
-export default function Dashboard({ onBack, researcherName, researcherId, priorities, scanSettings, onOpenSettings, onOpenLLMSettings }) {
+export default function Dashboard({ onBack, researcherName, priorities, scanSettings, onOpenSettings, onOpenLLMSettings }) {
   const [species, setSpecies] = useState([]);
   const [stresses, setStresses] = useState([]);
   const methods = PHENOTYPING_METHODS.map((m) => m.value);
@@ -1349,11 +1334,10 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
   const prevPaperIdsRef    = useRef(new Set());
   const prevProposalIdsRef = useRef(new Set());
 
-  const RESEARCHER_ID = researcherId || "researcher_001";
 
   const refreshSessions = useCallback(
-    () => fetchSessions(RESEARCHER_ID, setSessions),
-    [RESEARCHER_ID],
+    () => fetchSessions(setSessions),
+    [],
   );
 
   // Poll agent status every 10 seconds
@@ -1367,14 +1351,14 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
   // Restore profile, last results, contradictions, and new-paper markers on mount
   useEffect(() => {
-    loadAndApplyProfile(RESEARCHER_ID, setSpecies, setStresses, setSources, setTimeRange);
-    loadRestoredResults(RESEARCHER_ID, setPapers, setSynthesisPaperMeta, setCombos, setRagCombos);
-    loadRestoredContradictions(RESEARCHER_ID, setContradictions);
-    loadNewPapers(RESEARCHER_ID, setNewPaperIds, setNewSince);
-  }, [RESEARCHER_ID]);
+    loadAndApplyProfile(setSpecies, setStresses, setSources, setTimeRange);
+    loadRestoredResults(setPapers, setSynthesisPaperMeta, setCombos, setRagCombos);
+    loadRestoredContradictions(setContradictions);
+    loadNewPapers(setNewPaperIds, setNewSince);
+  }, []);
 
   const doAnchorSearch = useCallback(
-    () => runAnchorSearch(RESEARCHER_ID, anchorInput, setAnchorLoading, setAnchorResults),
+    () => runAnchorSearch(anchorInput, setAnchorLoading, setAnchorResults),
     [anchorInput],
   );
 
@@ -1385,7 +1369,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
 
   const doRate = useCallback((proposal, rating) => {
     setRatings((prev) => ({ ...prev, [proposal.proposal_id]: rating }));
-    submitRating(RESEARCHER_ID, proposal, rating);
+    submitRating(proposal, rating);
   }, []);
 
   const applyContradictions = useCallback((incoming) => {
@@ -1406,8 +1390,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
     prevProposalIdsRef.current = new Set(ragCombos.map((c) => c.proposal_id || c.suggestion));
     try {
       const data = await fetchSearchResult({
-        researcher_id: RESEARCHER_ID,
-        name: researcherName || "Researcher",
         plant_species: species,
         stress_types: stresses,
         phenotyping_methods: methods,
@@ -1445,7 +1427,7 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       setTab("results");
       refreshSessions();
       // When contradictions arrive, mark those not seen before as new.
-      pollForContradictions(RESEARCHER_ID, applyContradictions);
+      pollForContradictions(applyContradictions);
     } catch (err) {
       setSearchError(err.message);
       setShowProgress(false);
@@ -1656,7 +1638,6 @@ export default function Dashboard({ onBack, researcherName, researcherId, priori
       <footer style={S.footer}>OPAL · CASSIOPEIA v0.1</footer>
       {showProgress && (
         <ProgressModal
-          researcherId={RESEARCHER_ID}
           searching={searching}
           onDismiss={() => setShowProgress(false)}
         />
@@ -1814,7 +1795,6 @@ const S = {
 Dashboard.propTypes = {
   onBack: PropTypes.func,
   researcherName: PropTypes.string,
-  researcherId: PropTypes.string,
   priorities: PropTypes.shape({
     novelty: PropTypes.number.isRequired,
     relevance: PropTypes.number.isRequired,

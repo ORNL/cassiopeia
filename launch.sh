@@ -50,11 +50,12 @@ set -o allexport
 source "$SCRIPT_DIR/.env"
 set +o allexport
 
-# Validate that at least one LLM API key is configured
+# LLM API keys are configured per-researcher in the Settings UI and stored
+# encrypted, so an env key is only an optional admin-level override — not a
+# precondition for starting.
 if [[ -z "$ANTHROPIC_API_KEY" && -z "$OPENAI_API_KEY" && -z "$AZURE_API_KEY" && -z "$GEMINI_API_KEY" && -z "$MISTRAL_API_KEY" ]]; then
-    echo "ERROR: No LLM API key found in .env."
-    echo "  Set at least one of: ANTHROPIC_API_KEY, OPENAI_API_KEY, AZURE_API_KEY, GEMINI_API_KEY, MISTRAL_API_KEY"
-    exit 1
+    echo "NOTE: no LLM API key in .env — configure one per researcher in the"
+    echo "      dashboard Settings (🔑) after launch."
 fi
 
 API_PORT="${API_PORT:-8000}"

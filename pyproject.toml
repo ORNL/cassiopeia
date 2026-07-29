@@ -38,9 +38,13 @@ dev = [
 mcp = [
     "mcp[cli]>=1.0",
 ]
+# Globus Auth — required when GLOBUS_AUTH_ENABLED=true
+auth = [
+    "globus-sdk>=3.40",
+]
 # Install everything at once
 all = [
-    "cassiopeia[dev,mcp]",
+    "cassiopeia[dev,mcp,auth]",
 ]
 
 [tool.setuptools.packages.find]

@@ -5,7 +5,7 @@ import { useState } from "react";
 import PropTypes from "prop-types";
 import logo from "./assets/logo.png";
 
-export default function LandingPage({ onLogin, pending }) {
+export default function LandingPage({ onLogin, onGlobusLogin, globusEnabled, pending, error }) {
   const [input, setInput] = useState("");
 
   const handleLogin = () => {
@@ -26,26 +26,45 @@ export default function LandingPage({ onLogin, pending }) {
       </div>
 
       <div style={S.loginBox}>
-        <p style={S.loginLabel}>Enter your name to get started</p>
-        <div style={S.loginRow}>
-          <input
-            style={S.loginInput}
-            type="text"
-            placeholder="Your name…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleLogin()}
-            autoFocus
-            disabled={pending}
-          />
-          <button
-            style={{ ...S.loginBtn, ...(disabled ? S.loginBtnDisabled : {}) }}
-            onClick={handleLogin}
-            disabled={disabled}
-          >
-            {pending ? "⏳" : "Enter →"}
-          </button>
-        </div>
+        {error && <p style={S.error}>{error}</p>}
+        {globusEnabled ? (
+          <>
+            <p style={S.loginLabel}>Sign in to reach your library and proposals</p>
+            <button
+              style={{ ...S.globusBtn, ...(pending ? S.loginBtnDisabled : {}) }}
+              onClick={onGlobusLogin}
+              disabled={pending}
+            >
+              {pending ? "⏳ Signing in…" : "Sign in with Globus"}
+            </button>
+          </>
+        ) : (
+          <>
+            <p style={S.loginLabel}>Enter your name to get started</p>
+            <div style={S.loginRow}>
+              <input
+                style={S.loginInput}
+                type="text"
+                placeholder="Your name…"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleLogin()}
+                autoFocus
+                disabled={pending}
+              />
+              <button
+                style={{ ...S.loginBtn, ...(disabled ? S.loginBtnDisabled : {}) }}
+                onClick={handleLogin}
+                disabled={disabled}
+              >
+                {pending ? "⏳" : "Enter →"}
+              </button>
+            </div>
+            <p style={S.devNote}>
+              Development mode — no authentication configured
+            </p>
+          </>
+        )}
       </div>
 
       <div style={S.footer}>
@@ -130,6 +149,27 @@ const S = {
   loginBtnDisabled: {
     opacity: 0.4,
     cursor: "default",
+  },
+  globusBtn: {
+    background: "#0c1f2d",
+    border: "1px solid #0e4a6e",
+    borderRadius: 8,
+    color: "#22d3ee",
+    fontSize: 15,
+    fontWeight: 600,
+    padding: "12px 28px",
+    cursor: "pointer",
+  },
+  devNote: {
+    fontSize: 11,
+    color: "#475569",
+    marginTop: 14,
+    letterSpacing: "0.04em",
+  },
+  error: {
+    fontSize: 13,
+    color: "#f87171",
+    marginBottom: 14,
   },
   userBar: {
     display: "flex",
@@ -218,5 +258,8 @@ const S = {
 
 LandingPage.propTypes = {
   onLogin: PropTypes.func.isRequired,
+  onGlobusLogin: PropTypes.func.isRequired,
+  globusEnabled: PropTypes.bool,
   pending: PropTypes.bool,
+  error: PropTypes.string,
 };

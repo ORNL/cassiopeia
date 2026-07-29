@@ -227,8 +227,13 @@ The `RAGAgent` embeds paper abstracts using ChromaDB's built-in `DefaultEmbeddin
                    │ POST /api/anchor_search
                    │ POST /api/rag/synthesize
                    │ GET  /api/status  /api/rag/status
-                   │ GET  /api/sessions/{researcher_id}
+                   │ GET  /api/sessions
+                   │ GET  /api/researcher  /api/researcher/results
+                   │ GET  /api/contradictions
+                   │ GET  /api/auth/config  /api/auth/me
                    │ GET  /api/config
+                   │ (every per-researcher route carries the caller's
+                   │  Globus Bearer token — no researcher_id is sent)
 ┌──────────────────▼───────────────────────────────────┐
 │  FastAPI server (port 8000)   api_server.py          │
 │  • loads .env                                        │
@@ -268,7 +273,9 @@ The `RAGAgent` embeds paper abstracts using ChromaDB's built-in `DefaultEmbeddin
 
 ## Configuration
 
-Copy `.env.example` to `.env` and fill in the values for the provider(s) you use.
+Copy `.env.example` to `.env` and fill in the values you need. `.env` is
+git-ignored and is where real credentials belong; `.env.example` is the tracked
+template, so mirror any new variable there without its value.
 
 ```bash
 cp .env.example .env
@@ -284,6 +291,70 @@ cp .env.example .env
 | `CHAINLIT_URL` | `http://localhost:8001` | URL where the browser reaches the Chainlit server. |
 | `API_PORT` | `8000` | FastAPI port. |
 | `CHAINLIT_PORT` | `8001` | Chainlit port. |
+| `GLOBUS_AUTH_ENABLED` | `true` | Require Globus sign-in. See [Authentication](#authentication). |
+| `CASSIOPEIA_ALLOW_INSECURE_DEV` | `false` | Permit running with auth disabled on a non-loopback bind. Never set on a shared deployment. |
+| `GLOBUS_CLIENT_ID` | — | Globus confidential client UUID. |
+| `GLOBUS_CLIENT_SECRET` | — | Client secret. Required: token introspection needs a confidential client. |
+| `GLOBUS_REDIRECT_URI` | `http://localhost:5173` | Must match a redirect URI registered on the client. |
+| `GLOBUS_ALLOWED_GROUPS` | — | Optional comma-separated Globus Group UUIDs; identities outside them get 403. |
+| `CASSIOPEIA_SETTINGS_SECRET` | host MAC | Encrypts stored LLM API keys. Set it for anything beyond a single dev machine. |
+
+## Authentication
+
+Researchers sign in with [Globus Auth](https://www.globus.org/globus-auth-service).
+The dashboard runs the OAuth 2.0 authorization-code flow with PKCE and sends the
+resulting token as a Bearer on every request; the API introspects it and resolves
+the researcher identity itself. **No endpoint accepts a researcher_id from the
+client** — that is what keeps one researcher's library, proposals, feedback and
+stored API keys out of another's reach.
+
+Register a confidential client at
+[app.globus.org/settings/developers](https://app.globus.org/settings/developers),
+add your dashboard URL as a redirect URI, then:
+
+```bash
+GLOBUS_AUTH_ENABLED=true
+GLOBUS_CLIENT_ID=<client uuid>
+GLOBUS_CLIENT_SECRET=<secret>
+GLOBUS_REDIRECT_URI=http://localhost:5173
+```
+
+Restrict access to a lab or project by listing its Globus Group UUIDs in
+`GLOBUS_ALLOWED_GROUPS`; an authenticated identity in none of them is rejected.
+
+### Development mode
+
+With `GLOBUS_AUTH_ENABLED=false` the API trusts an `X-User-ID` header and the
+landing page shows a name box instead of a sign-in button, so several identities
+can be exercised without registering a client. **This is not an access control**
+— anyone who can reach the port can claim any identity.
+
+Two things keep that from reaching a deployment:
+
+- **The default is `true`.** An unset `GLOBUS_AUTH_ENABLED` means authentication
+  is on, so forgetting it fails closed.
+- **The server refuses to start** with authentication disabled unless it is bound
+  to the loopback interface. `uvicorn api_server:app --port 8000` binds
+  `127.0.0.1` and is fine; the Compose command's `--host 0.0.0.0` is not, and
+  exits with an explanatory error.
+
+Set `CASSIOPEIA_ALLOW_INSECURE_DEV=true` to override the second check when you
+genuinely mean it — running the containers on your own machine without a Globus
+client, for example. It logs a warning on every start.
+
+### What is shared and what is not
+
+| Data | Scope |
+| --- | --- |
+| Paper records: title, abstract, authors, DOI, credibility, embeddings | Shared corpus, deduplicated across researchers |
+| Which papers you collected, and their relevance scores | Private |
+| Profile, proposals, session history, ratings, contradictions | Private |
+| LLM API keys | Private, encrypted at rest |
+
+Retrieval defaults to your own collection. Endpoints that support cross-corpus
+search (`/api/rag/synthesize`, `/api/anchor_search`) take an explicit
+`own_papers_only: false` — that widens retrieval over shared *paper content*
+only; it never exposes another researcher's scores, proposals or profile.
 
 ### Provider examples
 

@@ -310,9 +310,9 @@ def test_mark_full_text_indexed(tmp_path):
     import json, datetime
     store = PaperStore(tmp_path / "test.db")
     store._conn.execute(
-        "INSERT INTO papers (paper_id, researcher_id, data, rag_indexed, full_text_indexed, added_at) "
-        "VALUES (?, ?, ?, 1, 0, ?)",
-        ("P3", "fred", json.dumps({"paper_id": "P3"}), datetime.datetime.now(datetime.timezone.utc).isoformat()),
+        "INSERT INTO papers (paper_id, data, rag_indexed, full_text_indexed, first_seen_at) "
+        "VALUES (?, ?, 1, 0, ?)",
+        ("P3", json.dumps({"paper_id": "P3"}), datetime.datetime.now(datetime.timezone.utc).isoformat()),
     )
     store._conn.commit()
     store.mark_full_text_indexed(["P3"])
@@ -342,12 +342,12 @@ def test_get_papers_needing_chunking(tmp_path):
     store = PaperStore(tmp_path / "test.db")
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     store._conn.executemany(
-        "INSERT INTO papers (paper_id, researcher_id, data, rag_indexed, full_text_indexed, added_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO papers (paper_id, data, rag_indexed, full_text_indexed, first_seen_at) "
+        "VALUES (?, ?, ?, ?, ?)",
         [
-            ("A", "fred", json.dumps({"source": "pubmed"}), 1, 0, now),  # needs chunking
-            ("B", "fred", json.dumps({"source": "pubmed"}), 1, 1, now),  # already chunked
-            ("C", "fred", json.dumps({"source": "pubmed"}), 0, 0, now),  # not even indexed
+            ("A", json.dumps({"source": "pubmed"}), 1, 0, now),  # needs chunking
+            ("B", json.dumps({"source": "pubmed"}), 1, 1, now),  # already chunked
+            ("C", json.dumps({"source": "pubmed"}), 0, 0, now),  # not even indexed
         ],
     )
     store._conn.commit()
