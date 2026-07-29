@@ -339,8 +339,17 @@ Two things keep that from reaching a deployment:
   exits with an explanatory error.
 
 Set `CASSIOPEIA_ALLOW_INSECURE_DEV=true` to override the second check when you
-genuinely mean it — running the containers on your own machine without a Globus
-client, for example. It logs a warning on every start.
+genuinely mean it. It logs a warning on every start.
+
+For the common case — running the containers on your own machine without a
+Globus client — use the development overlay rather than setting that by hand:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+It sets the override *and* publishes both ports on `127.0.0.1`, so the stack is
+genuinely local rather than merely asserted to be.
 
 ### What is shared and what is not
 
@@ -420,11 +429,27 @@ Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/).
 ### Option B — Docker (any platform)
 
 ```bash
-cp .env.example .env          # fill in your API key
+cp .env.example .env          # fill in GLOBUS_CLIENT_ID / GLOBUS_CLIENT_SECRET
 docker compose up --build -d
 ```
 
 Open [http://localhost:5173](http://localhost:5173).
+
+Authentication is required here: `docker compose` publishes the API on all
+interfaces, and the server refuses to serve unauthenticated traffic to anything
+but the local machine.
+
+To run the stack locally **without** registering a Globus client, add the
+development overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up --build
+```
+
+That disables authentication and publishes both ports on `127.0.0.1` only, so
+the stack is unreachable from other machines. Naming the file is deliberate — a
+bare `docker compose up` is the deployment configuration and stays
+authenticated.
 
 ### Option C — Native Linux / WSL2
 

@@ -1,0 +1,31 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Local development overlay — runs the stack without a Globus client.
+#
+#     docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Naming this file is deliberate: docker-compose.yml on its own is the
+# deployment configuration and stays authenticated. Nothing here is ever
+# applied by a bare `docker compose up`.
+#
+# Authentication is off, so the API trusts the X-User-ID header and the
+# dashboard shows a name box — handy for exercising several researchers at
+# once. A container cannot bind the loopback interface and still be reachable
+# through a published port, so the safety property is enforced where it can be:
+# both ports are published on 127.0.0.1 only, and are therefore not reachable
+# from any other machine.
+
+services:
+
+  api:
+    environment:
+      GLOBUS_AUTH_ENABLED: "false"
+      # Acknowledges that the container binds 0.0.0.0 internally.
+      CASSIOPEIA_ALLOW_INSECURE_DEV: "true"
+    ports: !override
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+
+  dashboard:
+    ports: !override
+      - "127.0.0.1:5173:5173"

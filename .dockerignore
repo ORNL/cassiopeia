@@ -34,4 +34,5 @@ CASSIOPEIA_HOW_IT_WORKS.md
 *.bat
 Dockerfile
 docker-compose.yml
+docker-compose.dev.yml
 .dockerignore
