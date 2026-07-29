@@ -3,6 +3,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import PropTypes from "prop-types";
+import { apiFetch, postJson } from "./api.js";
 
 // ── LLM Settings modal — per-researcher provider selection & key storage ──────
 
@@ -12,7 +13,7 @@ const PROVIDER_DESCRIPTIONS = {
   azure:     "GPT-4 via ORNL Azure OpenAI deployment.",
 };
 
-export default function Settings({ researcherId, onClose }) {
+export default function Settings({ onClose }) {
   const [providers, setProviders] = useState([]);
   const [loading, setLoading]     = useState(true);
   const [keyInputs, setKeyInputs] = useState({});    // provider → string
@@ -24,12 +25,12 @@ export default function Settings({ researcherId, onClose }) {
 
   const fetchProviders = useCallback(async () => {
     try {
-      const r = await fetch(`/api/settings/providers?researcher_id=${encodeURIComponent(researcherId)}`);
+      const r = await apiFetch("/api/settings/providers");
       if (r.ok) setProviders(await r.json());
     } finally {
       setLoading(false);
     }
-  }, [researcherId]);
+  }, []);
 
   useEffect(() => { fetchProviders(); }, [fetchProviders]);
 
@@ -50,11 +51,7 @@ export default function Settings({ researcherId, onClose }) {
     if (!key) { showFlash(provider, false, "Enter an API key first."); return; }
     setSaving((s) => ({ ...s, [provider]: true }));
     try {
-      const r = await fetch(
-        `/api/settings/api-key?researcher_id=${encodeURIComponent(researcherId)}`,
-        { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider, api_key: key }) },
-      );
+      const r = await postJson("/api/settings/api-key", { provider, api_key: key });
       if (r.ok) {
         setKeyInputs((k) => { const n = { ...k }; delete n[provider]; return n; });
         showFlash(provider, true, "Key saved.");
@@ -71,9 +68,8 @@ export default function Settings({ researcherId, onClose }) {
   async function handleRemove(provider) {
     setRemoving((s) => ({ ...s, [provider]: true }));
     try {
-      const r = await fetch(
-        `/api/settings/api-key/${encodeURIComponent(provider)}?researcher_id=${encodeURIComponent(researcherId)}`,
-        { method: "DELETE" },
+      const r = await apiFetch(
+        `/api/settings/api-key/${encodeURIComponent(provider)}`, { method: "DELETE" },
       );
       if (r.ok) { showFlash(provider, true, "Key removed."); await fetchProviders(); }
       else { showFlash(provider, false, "Remove failed."); }
@@ -85,11 +81,7 @@ export default function Settings({ researcherId, onClose }) {
   async function handleSetActive(provider) {
     setActivating((s) => ({ ...s, [provider]: true }));
     try {
-      const r = await fetch(
-        `/api/settings/active-provider?researcher_id=${encodeURIComponent(researcherId)}`,
-        { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ provider }) },
-      );
+      const r = await postJson("/api/settings/active-provider", { provider });
       if (r.ok) { showFlash(provider, true, "Active provider updated."); await fetchProviders(); }
       else { const d = await r.json().catch(() => ({})); showFlash(provider, false, d.detail || "Failed."); }
     } finally {
@@ -205,7 +197,6 @@ export default function Settings({ researcherId, onClose }) {
 }
 
 Settings.propTypes = {
-  researcherId: PropTypes.string.isRequired,
   onClose: PropTypes.func.isRequired,
 };
 
