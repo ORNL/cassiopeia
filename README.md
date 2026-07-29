@@ -273,8 +273,13 @@ The `RAGAgent` embeds paper abstracts using ChromaDB's built-in `DefaultEmbeddin
 
 ## Configuration
 
-Settings live in `.env`, which is tracked in git — keep secrets out of it and
-supply them from the deployment environment instead.
+Copy `.env.example` to `.env` and fill in the values you need. `.env` is
+git-ignored and is where real credentials belong; `.env.example` is the tracked
+template, so mirror any new variable there without its value.
+
+```bash
+cp .env.example .env
+```
 
 ### Key variables
 
@@ -288,7 +293,7 @@ supply them from the deployment environment instead.
 | `CHAINLIT_PORT` | `8001` | Chainlit port. |
 | `GLOBUS_AUTH_ENABLED` | `false` | Require Globus sign-in. See [Authentication](#authentication). |
 | `GLOBUS_CLIENT_ID` | — | Globus confidential client UUID. |
-| `GLOBUS_CLIENT_SECRET` | — | Client secret. Supply from the environment, never from `.env` (it is tracked). |
+| `GLOBUS_CLIENT_SECRET` | — | Client secret. Required: token introspection needs a confidential client. |
 | `GLOBUS_REDIRECT_URI` | `http://localhost:5173` | Must match a redirect URI registered on the client. |
 | `GLOBUS_ALLOWED_GROUPS` | — | Optional comma-separated Globus Group UUIDs; identities outside them get 403. |
 | `CASSIOPEIA_SETTINGS_SECRET` | host MAC | Encrypts stored LLM API keys. Set it for anything beyond a single dev machine. |
@@ -309,7 +314,7 @@ add your dashboard URL as a redirect URI, then:
 ```bash
 GLOBUS_AUTH_ENABLED=true
 GLOBUS_CLIENT_ID=<client uuid>
-GLOBUS_CLIENT_SECRET=<secret>          # from the environment, not .env
+GLOBUS_CLIENT_SECRET=<secret>
 GLOBUS_REDIRECT_URI=http://localhost:5173
 ```
 
