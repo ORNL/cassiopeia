@@ -1335,11 +1335,20 @@ class RAGAgent(Agent):
             return ""
 
     @action
-    async def synthesize(self, question: str, researcher_id: str | None = None) -> str:
+    async def synthesize(
+        self,
+        question: str,
+        researcher_id: str | None = None,
+        own_papers_only: bool = True,
+    ) -> str:
         """Answer a free-form question using RAG + LangGraph ReAct.
 
         Builds a ReAct agent with a ``search_knowledge_base`` tool that
         queries ChromaDB, then streams the final answer back.
+
+        ``researcher_id`` identifies the caller and always resolves their LLM
+        credentials; ``own_papers_only`` decides whether retrieval is limited
+        to their collection or spans the shared corpus.
         """
         if not researcher_id:
             return "Please provide a researcher_id to use the synthesis feature."
@@ -1348,11 +1357,12 @@ class RAGAgent(Agent):
         except LLMNotConfiguredError:
             return "LLM not configured. Please set up a provider in Settings before using synthesis."
 
+        scope = researcher_id if own_papers_only else None
         try:
-            return await self._run_react(question, researcher_id, llm_r)
+            return await self._run_react(question, scope, llm_r)
         except Exception as exc:
             logger.warning("ReAct synthesis failed, falling back to direct RAG: %s", exc)
-            return await self._fallback_answer(question, researcher_id, llm_r)
+            return await self._fallback_answer(question, scope, llm_r)
 
     @action
     async def get_rag_status(self) -> dict[str, Any]:
