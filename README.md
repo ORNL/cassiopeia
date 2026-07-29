@@ -295,7 +295,7 @@ cp .env.example .env
 | `CASSIOPEIA_ALLOW_INSECURE_DEV` | `false` | Permit running with auth disabled on a non-loopback bind. Never set on a shared deployment. |
 | `GLOBUS_CLIENT_ID` | — | Globus confidential client UUID. |
 | `GLOBUS_CLIENT_SECRET` | — | Client secret. Required: token introspection needs a confidential client. |
-| `GLOBUS_REDIRECT_URI` | `http://localhost:5173` | Must match a redirect URI registered on the client. |
+| `GLOBUS_REDIRECT_URI` | `https://localhost:5173` | Must match a redirect URI registered on the client, exactly. |
 | `GLOBUS_ALLOWED_GROUPS` | — | Optional comma-separated Globus Group UUIDs; identities outside them get 403. |
 | `CASSIOPEIA_SETTINGS_SECRET` | host MAC | Encrypts stored LLM API keys. Set it for anything beyond a single dev machine. |
 
@@ -316,7 +316,7 @@ add your dashboard URL as a redirect URI, then:
 GLOBUS_AUTH_ENABLED=true
 GLOBUS_CLIENT_ID=<client uuid>
 GLOBUS_CLIENT_SECRET=<secret>
-GLOBUS_REDIRECT_URI=http://localhost:5173
+GLOBUS_REDIRECT_URI=https://localhost:5173
 ```
 
 Restrict access to a lab or project by listing its Globus Group UUIDs in
@@ -489,7 +489,8 @@ chainlit run chainlit_app.py --port 8001 --headless
 cd frontend && npm run dev
 ```
 
-Open [http://localhost:5173](http://localhost:5173).
+Open [https://localhost:5173](https://localhost:5173). The dev server uses a
+self-signed certificate, so accept the browser warning once.
 
 ### Production build (frontend)
 

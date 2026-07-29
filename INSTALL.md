@@ -165,7 +165,7 @@ chainlit run chainlit_app.py --port 8001 --headless
 cd frontend && npm run dev
 ```
 
-Then open **[http://localhost:5173](http://localhost:5173)** in your browser.
+Then open **[https://localhost:5173](https://localhost:5173)** in your browser (the dev server uses a self-signed certificate — accept the warning once).
 
 ---
 

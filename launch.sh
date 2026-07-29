@@ -125,15 +125,15 @@ tmux select-window -t "$SESSION:api"
 
 echo "Cassiopeia started in tmux session '$SESSION'."
 echo "  API server  → http://localhost:$API_PORT"
-echo "  Dashboard   → http://localhost:5173"
+echo "  Dashboard   → https://localhost:5173  (self-signed cert — accept the browser warning)"
 # echo "  Chat        → http://localhost:$CHAINLIT_PORT"  (Chainlit disabled)
 echo ""
 
 # Open the dashboard in the default browser after a short delay
 (sleep 3 && \
-    if command -v wslview &>/dev/null; then wslview "http://localhost:5173"; \
-    elif command -v xdg-open &>/dev/null; then xdg-open "http://localhost:5173"; \
-    elif command -v open &>/dev/null; then open "http://localhost:5173"; \
+    if command -v wslview &>/dev/null; then wslview "https://localhost:5173"; \
+    elif command -v xdg-open &>/dev/null; then xdg-open "https://localhost:5173"; \
+    elif command -v open &>/dev/null; then open "https://localhost:5173"; \
     fi) &
 
 echo "Attaching (Ctrl-b d to detach, ./launch.sh stop to kill)..."

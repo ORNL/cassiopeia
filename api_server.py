@@ -125,7 +125,11 @@ app = FastAPI(title="APPL Literature Mining API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    # Both dashboards are same-origin with the API (Vite and nginx each proxy
+    # /api), so CORS is not exercised today. Listed for the case where the API
+    # is split onto its own host: https for the Vite dev server, http for the
+    # nginx container.
+    allow_origins=["https://localhost:5173", "http://localhost:5173"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

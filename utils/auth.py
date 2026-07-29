@@ -26,7 +26,7 @@ Configuration::
     GLOBUS_CLIENT_ID=<confidential client UUID>
     GLOBUS_CLIENT_SECRET=<client secret>
     GLOBUS_ALLOWED_GROUPS=<comma-separated group UUIDs>   # optional allowlist
-    GLOBUS_REDIRECT_URI=http://localhost:5173             # SPA callback
+    GLOBUS_REDIRECT_URI=https://localhost:5173            # SPA callback
 """
 
 from __future__ import annotations
@@ -56,7 +56,7 @@ ALLOW_INSECURE_DEV = (
 )
 GLOBUS_CLIENT_ID = os.environ.get("GLOBUS_CLIENT_ID", "")
 GLOBUS_CLIENT_SECRET = os.environ.get("GLOBUS_CLIENT_SECRET", "")
-GLOBUS_REDIRECT_URI = os.environ.get("GLOBUS_REDIRECT_URI", "http://localhost:5173")
+GLOBUS_REDIRECT_URI = os.environ.get("GLOBUS_REDIRECT_URI", "https://localhost:5173")
 
 GLOBUS_AUTH_URI = "https://auth.globus.org/v2/oauth2/authorize"
 GLOBUS_TOKEN_URI = "https://auth.globus.org/v2/oauth2/token"
