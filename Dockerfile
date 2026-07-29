@@ -23,7 +23,7 @@ RUN python -c "import site, shutil; shutil.copy('sitecustomize.py', site.getsite
     && rm sitecustomize.py \
     && mkdir -p agents utils models \
     && touch agents/__init__.py utils/__init__.py models/__init__.py \
-    && pip install --no-cache-dir -e . \
+    && pip install --no-cache-dir -e ".[auth]" \
     && DISABLE_SSL_VERIFY=true python preload.py \
     && rm preload.py
 
@@ -31,4 +31,5 @@ RUN python -c "import site, shutil; shutil.copy('sitecustomize.py', site.getsite
 COPY agents/   agents/
 COPY utils/    utils/
 COPY models/   models/
+COPY api/      api/
 COPY api_server.py chainlit_app.py mcp_server.py ./
