@@ -45,16 +45,14 @@ echo [2/4] Configuring environment...
 if not exist ".env" (
     if exist ".env.example" (
         copy /y ".env.example" ".env" >nul
-        echo        Created .env from .env.example.
+        echo        Created .env from template.
     ) else (
-        echo        WARNING: neither .env nor .env.example found.
-        echo        Copy .env from another installation or contact your administrator.
+        echo ERROR: .env.example not found.
         pause & exit /b 1
     )
 ) else (
-    echo        .env found.
+    echo        .env already exists.
 )
-echo        NOTE: LLM API keys are configured per-user in the Settings UI after launch.
 
 :: ── Build images ─────────────────────────────────────────────────────────────
 echo [3/4] Building Docker images (first run may take several minutes)...
