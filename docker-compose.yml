@@ -51,6 +51,11 @@ services:
   dashboard:
     build:
       context: frontend
+      # The dashboard bundles the domain pack's UI components (domains/<pack>/ui).
+      additional_contexts:
+        domains: ./domains
+      args:
+        DOMAIN_PACK: ${DOMAIN_PACK:-}
     ports:
       - "5173:5173"
     restart: unless-stopped

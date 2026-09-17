@@ -10,10 +10,16 @@ FROM node:22-alpine AS builder
 # Disable TLS verification for corporate proxy environments
 ENV NODE_TLS_REJECT_UNAUTHORIZED=0
 
+# Which domain pack's UI to bundle (empty: the only installed pack).
+ARG DOMAIN_PACK=""
+ENV DOMAIN_PACK=${DOMAIN_PACK}
+
 WORKDIR /app
 COPY package.json package-lock.json* ./
 # --include=dev ensures vite and other devDependencies are installed
 RUN npm install --include=dev
+# Domain packs sit next to the app, where vite.config.js looks for them (../domains).
+COPY --from=domains . /domains
 COPY . .
 RUN npm run build && ls /app/dist
 

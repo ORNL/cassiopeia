@@ -21,8 +21,8 @@ WORKDIR /app
 COPY docker/sitecustomize.py docker/preload.py pyproject.toml ./
 RUN python -c "import site, shutil; shutil.copy('sitecustomize.py', site.getsitepackages()[0] + '/sitecustomize.py')" \
     && rm sitecustomize.py \
-    && mkdir -p agents utils models \
-    && touch agents/__init__.py utils/__init__.py models/__init__.py \
+    && mkdir -p agents utils models domains \
+    && touch agents/__init__.py utils/__init__.py models/__init__.py domains/__init__.py \
     && pip install --no-cache-dir -e ".[auth]" \
     && DISABLE_SSL_VERIFY=true python preload.py \
     && rm preload.py
@@ -32,4 +32,5 @@ COPY agents/   agents/
 COPY utils/    utils/
 COPY models/   models/
 COPY api/      api/
+COPY domains/  domains/
 COPY api_server.py chainlit_app.py mcp_server.py ./
