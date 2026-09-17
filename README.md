@@ -3,6 +3,8 @@
 
 An [Academy](https://github.com/proxystore/academy)-based agent that continuously monitors plant biology literature, scores retrieved papers against a researcher's profile, and proposes novel experiment combinations.
 
+> **Domain packs.** The literature engine (fetch → dedupe → enrich → score → index → retrieve → synthesize → verify → critique) is domain-neutral. Everything specific to plant phenotyping at APPL — profile facets, vocabularies, sources, prompt wording, the instrument list and the feasibility pass — lives in the `plant_phenotyping` pack under [`domains/`](domains/). Another science community gets its own deployment by writing a pack: see [docs/DOMAIN_PACKS.md](docs/DOMAIN_PACKS.md). The rest of this README describes the APPL deployment.
+
 ---
 
 ## What it does
@@ -34,7 +36,7 @@ Queries are generated from a **researcher profile** that captures:
 - Free-text expertise keywords
 - A time window (default: last 12 months, configurable up to 10 years)
 
-The `QueryGenerator` builds **species × stress** combinations and dispatches one query per source. Up to 20 papers are retrieved per query.
+The `QueryGenerator` crosses the pack's query facets — here **species × stress** — and dispatches one query per source. Up to 20 papers are retrieved per query.
 
 > **Design note — why methods are excluded from queries.** Phenotyping methods are assessed *post-retrieval* by the LLM scorer, which handles synonyms and paraphrases (e.g. *"VNIR spectroscopy"* → hyperspectral imaging). Pre-filtering at query time would silently discard relevant papers whose abstracts use different but equivalent terminology.
 
@@ -44,14 +46,14 @@ Each retrieved paper goes through a six-dimensional relevance score:
 
 | Dimension | How it is computed |
 | --- | --- |
-| `species_match` | **LLM** reads the abstract and assesses organism overlap |
-| `stress_match` | **LLM** assesses stress-type alignment |
-| `method_match` | **LLM** assesses methodological overlap **against the researcher's available instruments** |
+| `species` | **LLM** reads the abstract and assesses organism overlap |
+| `stress` | **LLM** assesses stress-type alignment |
+| `method` | **LLM** assesses methodological overlap **against the researcher's available instruments** |
 | `recency` | Deterministic: age of publication (days) |
 | `credibility` | Deterministic: journal tier + citation count + open-access |
 | `novelty` | Deterministic: title similarity against already-scored papers |
 
-The final `overall` score is a researcher-weighted combination:
+These first three are the pack's facets (`scores.facets` in the API). The final `overall` score is a researcher-weighted combination — facets with role `subject`/`condition` feed the relevance weight, `technique` facets the methodology weight:
 
 ```text
 overall = (relevance_weight × (species + stress) / 2
@@ -80,9 +82,9 @@ Researcher profile:
 Paper title    : "Canopy reflectance signatures of water-stressed Populus ..."
 Paper abstract : "... We applied VNIR spectroscopy to quantify ..."
 
-→ species_match : 0.92
-→ stress_match  : 0.85
-→ method_match  : 0.91   ← elevated because VNIR maps to available instrument
+→ species    : 0.92
+→ stress     : 0.85
+→ method     : 0.91   ← elevated because VNIR maps to available instrument
 → hypothesis    : "Combining VNIR canopy reflectance with root architecture
                    phenotyping could reveal above-ground proxies for
                    below-ground nitrogen dynamics under drought."
@@ -121,7 +123,7 @@ After indexing, the `RAGAgent.detect_contradictions()` action sends the top retr
 
 ### Feasibility filter
 
-After cross-paper proposals are generated, `RAGAgent.assess_feasibility()` passes each proposal back to the LLM together with the facility's instrument list. The LLM is asked whether the proposed measurements can be made with the available instruments, accounting for synonyms (e.g. *"canopy reflectance spectroscopy"* → VNIR hyperspectral imaging). Each proposal is annotated with:
+After cross-paper proposals are generated, the pack's `FeasibilityEvaluator` ([`domains/plant_phenotyping/hooks.py`](domains/plant_phenotyping/hooks.py), run by `RAGAgent.evaluate_proposals()`) passes each proposal back to the LLM together with the facility's instrument list. The LLM is asked whether the proposed measurements can be made with the available instruments, accounting for synonyms (e.g. *"canopy reflectance spectroscopy"* → VNIR hyperspectral imaging). Each proposal is annotated with:
 
 - `feasible` — `true`, `false`, or `"partial"`
 - `missing_equipment` — list of instruments the proposal needs but the facility lacks
@@ -132,7 +134,7 @@ Proposals are shown with a coloured badge (✓ green / ~ amber / ✗ red) and a 
 
 ### Anchor-paper search
 
-Users can supply a DOI or title fragment in the profile panel. The agent fetches the abstract from Europe PMC, then uses it as a semantic query seed against ChromaDB to surface the most similar papers in the knowledge base — useful for finding what has already been indexed on a paper you just read.
+Users can supply a DOI or title fragment in the profile panel. The agent resolves the abstract through the pack's source backends (Europe PMC here), then uses it as a semantic query seed against ChromaDB to surface the most similar papers in the knowledge base — useful for finding what has already been indexed on a paper you just read.
 
 ### Session history
 

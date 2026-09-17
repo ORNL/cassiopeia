@@ -121,6 +121,7 @@ Open `.env` in a text editor and fill in at minimum:
 
 - **`ANTHROPIC_API_KEY`** (or whichever provider you use)
 - **`LLM_SCORING_MODEL`** and **`LLM_CHAT_MODEL`** — already set to sensible defaults
+- **`DOMAIN_PACK`** — the community this deployment serves (default: the only installed pack, `plant_phenotyping`)
 - **`FACILITY_EQUIPMENT`** — comma-separated list of instruments at your facility
 
 Everything else can be left at its default value for a first run.

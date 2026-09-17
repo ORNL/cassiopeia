@@ -8,12 +8,13 @@ Ideas not yet implemented, ordered roughly by estimated value / effort ratio.
 
 | Feature | Notes |
 | --- | --- |
-| Feasibility filter | `RAGAgent.assess_feasibility()` — badges on every proposal, non-hiding policy |
+| Feasibility filter | Plant pack `FeasibilityEvaluator`, run by `RAGAgent.evaluate_proposals()` — badges on every proposal, non-hiding policy |
 | Contradiction detection | `RAGAgent.detect_contradictions()` — Contradictions tab in dashboard |
 | Anchor-paper search | `RAGAgent.find_similar_to_anchor()` — DOI / title → similar papers |
 | Session history | SQLite `sessions` table, displayed in profile panel |
 | Feedback loop | 👍/👎 on proposals, liked proposals steer next synthesis |
-| Equipment in `.env` | `FACILITY_EQUIPMENT` served via `/api/config`, not injected into queries |
+| Equipment in `.env` | `FACILITY_EQUIPMENT` — plant pack context, served via `/api/domain`, not injected into queries |
+| Domain packs | Generic engine + per-community packs (`domains/`), see `docs/DOMAIN_PACKS.md` |
 | LLM keyword extraction | `/api/extract_keywords` endpoint, editable chip UI |
 | Real query preview | `/api/preview_queries` calls actual `QueryGenerator` — replaces client-side approximation |
 | Extended time range | Slider up to 10 years (120 months) |
