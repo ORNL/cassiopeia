@@ -1,7 +1,7 @@
 # Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for utils/paper_scorer.py — scoring dimensions, weighted_score, ranking."""
+"""Tests for utils/paper_scorer.py — facet scoring, weighted_score, ranking."""
 
 from __future__ import annotations
 
@@ -12,19 +12,14 @@ import pytest
 from models.schemas import (
     CredibilityLevel,
     PaperMetadata,
-    PhenotypingMethod,
     RelevanceScore,
     ResearcherProfile,
     ScoredPaper,
-    SourceType,
-    StressType,
 )
 from utils.paper_scorer import PaperScorer
 
+_PRIORITIES = {"material": "relevance", "property": "relevance", "technique": "methodology"}
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def scorer():
@@ -39,7 +34,7 @@ def _paper(
     published_date: datetime | None = None,
     citation_count: int = 0,
     is_open_access: bool = False,
-    source: SourceType = SourceType.PUBMED,
+    source: str = "flagship",
     paper_id: str = "p1",
     doi: str | None = "10.1/x",
 ) -> PaperMetadata:
@@ -57,70 +52,44 @@ def _paper(
     )
 
 
-def _profile(
-    *,
-    species: list[str] | None = None,
-    stresses: list[StressType] | None = None,
-    methods: list[PhenotypingMethod] | None = None,
-) -> ResearcherProfile:
-    return ResearcherProfile(
-        researcher_id="r1",
-        name="Test",
-        plant_species=species or [],
-        stress_types=stresses or [],
-        phenotyping_methods=methods or [],
-    )
+def _profile(**facets: list[str]) -> ResearcherProfile:
+    return ResearcherProfile(researcher_id="r1", name="Test", facets=facets)
 
 
 # ---------------------------------------------------------------------------
-# _score_species
+# facet scores
 # ---------------------------------------------------------------------------
 
-def test_score_species_returns_half_when_no_species_in_profile(scorer):
-    paper = _paper(title="Drought response in plants", abstract="")
-    profile = _profile(species=[])
-    assert scorer._score_species(paper, profile) == pytest.approx(0.5)
+def test_every_pack_facet_is_scored(scorer):
+    scores = scorer.facet_scores(_paper(title="x"), _profile())
+    assert set(scores) == {"material", "property", "technique"}
 
 
-def test_score_species_returns_one_when_species_found(scorer):
-    paper = _paper(title="Poplar root growth", abstract="poplar seedlings were used")
-    profile = _profile(species=["poplar"])
-    assert scorer._score_species(paper, profile) == pytest.approx(1.0)
+def test_facet_score_is_half_when_nothing_selected(scorer):
+    scores = scorer.facet_scores(_paper(title="Graphite anodes"), _profile())
+    assert scores["material"] == pytest.approx(0.5)
 
 
-def test_score_species_returns_zero_when_species_missing(scorer):
-    paper = _paper(title="Maize drought tolerance", abstract="maize was studied")
-    profile = _profile(species=["poplar"])
-    assert scorer._score_species(paper, profile) == pytest.approx(0.0)
+def test_facet_score_is_one_when_all_terms_found(scorer):
+    paper = _paper(title="Graphite anodes", abstract="graphite particles were cycled")
+    assert scorer.facet_scores(paper, _profile(material=["graphite"]))["material"] == pytest.approx(1.0)
 
 
-def test_score_species_partial_match(scorer):
-    paper = _paper(title="Poplar and maize comparison", abstract="poplar is drought tolerant")
-    profile = _profile(species=["poplar", "arabidopsis"])
-    score = scorer._score_species(paper, profile)
-    assert 0.0 < score < 1.0
+def test_facet_score_is_zero_when_terms_missing(scorer):
+    paper = _paper(title="Silicon anodes", abstract="silicon swelling")
+    assert scorer.facet_scores(paper, _profile(material=["graphite"]))["material"] == pytest.approx(0.0)
 
 
-# ---------------------------------------------------------------------------
-# _score_stress
-# ---------------------------------------------------------------------------
-
-def test_score_stress_returns_half_when_no_stresses_in_profile(scorer):
-    paper = _paper(title="Drought signaling", abstract="")
-    profile = _profile(stresses=[])
-    assert scorer._score_stress(paper, profile) == pytest.approx(0.5)
+def test_facet_score_partial_match(scorer):
+    paper = _paper(title="Graphite and silicon", abstract="")
+    score = scorer.facet_scores(paper, _profile(material=["graphite", "lithium_iron_phosphate"]))["material"]
+    assert score == pytest.approx(0.5)
 
 
-def test_score_stress_returns_one_when_stress_found(scorer):
-    paper = _paper(title="Drought response", abstract="water deficit leads to ABA")
-    profile = _profile(stresses=[StressType.DROUGHT])
-    assert scorer._score_stress(paper, profile) == pytest.approx(1.0)
-
-
-def test_score_stress_returns_zero_when_stress_missing(scorer):
-    paper = _paper(title="Nutrient uptake", abstract="nitrogen and phosphorus")
-    profile = _profile(stresses=[StressType.DROUGHT])
-    assert scorer._score_stress(paper, profile) == pytest.approx(0.0)
+def test_facet_values_match_as_display_terms(scorer):
+    paper = _paper(title="Capacity fade in LFP cells")
+    score = scorer.facet_scores(paper, _profile(property=["capacity_fade"]))["property"]
+    assert score == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -128,59 +97,59 @@ def test_score_stress_returns_zero_when_stress_missing(scorer):
 # ---------------------------------------------------------------------------
 
 def test_score_recency_returns_low_when_no_date(scorer):
-    paper = _paper(published_date=None)
-    assert scorer._score_recency(paper) == pytest.approx(0.3)
-
-
-def test_score_recency_returns_one_for_recent_paper(scorer):
-    paper = _paper(published_date=datetime.now() - timedelta(days=30))
-    assert scorer._score_recency(paper) == pytest.approx(1.0)
-
-
-def test_score_recency_returns_low_for_old_paper(scorer):
-    paper = _paper(published_date=datetime.now() - timedelta(days=800))
-    assert scorer._score_recency(paper) == pytest.approx(0.1)
+    assert scorer._score_recency(_paper(published_date=None)) == pytest.approx(0.3)
 
 
 def test_score_recency_brackets(scorer):
-    cases = [
-        (60,  1.0),
-        (150, 0.8),
-        (300, 0.6),
-        (500, 0.3),
-        (900, 0.1),
-    ]
+    cases = [(30, 1.0), (60, 1.0), (150, 0.8), (300, 0.6), (500, 0.3), (800, 0.1), (900, 0.1)]
     for days, expected in cases:
         paper = _paper(published_date=datetime.now() - timedelta(days=days))
         assert scorer._score_recency(paper) == pytest.approx(expected), f"days={days}"
 
 
 # ---------------------------------------------------------------------------
-# _score_credibility
+# credibility
 # ---------------------------------------------------------------------------
 
-def test_score_credibility_high_for_top_journal(scorer):
-    paper = _paper(journal="nature")
-    score = scorer._score_credibility(paper)
-    assert score >= 0.7
-
-
-def test_score_credibility_mid_for_mid_journal(scorer):
-    paper = _paper(journal="plos one")
-    high_paper = _paper(journal="nature")
-    assert scorer._score_credibility(paper) < scorer._score_credibility(high_paper)
+def test_score_credibility_uses_pack_journal_tiers(scorer):
+    high = scorer._score_credibility(_paper(journal="Nature Materials"))
+    mid = scorer._score_credibility(_paper(journal="Journal of Power Sources"))
+    unknown = scorer._score_credibility(_paper(journal="Some Journal"))
+    assert high >= 0.7
+    assert high > mid > unknown
 
 
 def test_score_credibility_boosted_by_open_access(scorer):
-    closed = _paper(is_open_access=False)
-    open_access = _paper(is_open_access=True)
-    assert scorer._score_credibility(open_access) > scorer._score_credibility(closed)
+    assert scorer._score_credibility(_paper(is_open_access=True)) > scorer._score_credibility(_paper())
 
 
 def test_score_credibility_boosted_by_citation_count(scorer):
-    low_cited = _paper(citation_count=0)
-    high_cited = _paper(citation_count=50)
-    assert scorer._score_credibility(high_cited) > scorer._score_credibility(low_cited)
+    assert scorer._score_credibility(_paper(citation_count=50)) > scorer._score_credibility(_paper())
+
+
+def test_preprint_sources_are_preliminary(scorer):
+    paper = _paper(source="preprints", journal="Nature Materials", citation_count=100)
+    assert scorer._assess_credibility(paper) == CredibilityLevel.PRELIMINARY
+
+
+def test_high_impact_source_with_citations_is_high(scorer):
+    paper = _paper(source="flagship", journal="", citation_count=10)
+    assert scorer._assess_credibility(paper) == CredibilityLevel.HIGH
+
+
+def test_unknown_source_falls_back_to_citations(scorer):
+    assert scorer._assess_credibility(_paper(source="other", citation_count=10)) == CredibilityLevel.MODERATE
+    assert scorer._assess_credibility(_paper(source="other")) == CredibilityLevel.PRELIMINARY
+
+
+# ---------------------------------------------------------------------------
+# hints
+# ---------------------------------------------------------------------------
+
+def test_hints_follow_pack_template(scorer):
+    paper = _paper(title="Ionic conductivity and capacity fade")
+    hints = scorer._suggest_combinations(paper, _profile(property=["capacity_fade"]))
+    assert hints == ["Paper studies conductivity — relate it to your capacity fade work"]
 
 
 # ---------------------------------------------------------------------------
@@ -189,29 +158,41 @@ def test_score_credibility_boosted_by_citation_count(scorer):
 
 def test_weighted_score_between_zero_and_one():
     r = RelevanceScore(
-        species_match=0.8,
-        stress_match=0.6,
-        method_match=0.5,
-        recency=0.9,
-        credibility=0.7,
-        novelty=0.4,
+        facet_scores={"material": 0.8, "property": 0.6, "technique": 0.5},
+        recency=0.9, credibility=0.7, novelty=0.4,
     )
-    profile = _profile()
-    profile.priority_novelty = 0.5
-    profile.priority_relevance = 0.5
-    profile.priority_methodology = 0.5
-    profile.priority_reproducibility = 0.5
-    score = r.weighted_score(profile)
-    assert 0.0 <= score <= 1.0
+    assert 0.0 <= r.weighted_score(_profile(), _PRIORITIES) <= 1.0
+
+
+def test_weighted_score_averages_facets_sharing_a_priority():
+    profile = ResearcherProfile(
+        researcher_id="r", name="R",
+        priority_relevance=1.0, priority_methodology=0.0,
+        priority_novelty=0.0, priority_reproducibility=0.0,
+    )
+    r = RelevanceScore(facet_scores={"material": 1.0, "property": 0.5, "technique": 0.0})
+    assert r.weighted_score(profile, _PRIORITIES) == pytest.approx(0.75)
+
+
+def test_weighted_score_skips_priorities_without_facets():
+    profile = ResearcherProfile(
+        researcher_id="r", name="R",
+        priority_relevance=1.0, priority_methodology=1.0,
+        priority_novelty=0.0, priority_reproducibility=0.0,
+    )
+    r = RelevanceScore(facet_scores={"material": 1.0})
+    assert r.weighted_score(profile, {"material": "relevance"}) == pytest.approx(1.0)
 
 
 def test_weighted_score_higher_when_matching_dimensions_high():
-    low = RelevanceScore(species_match=0.1, stress_match=0.1, novelty=0.1,
-                         method_match=0.1, credibility=0.1)
-    high = RelevanceScore(species_match=0.9, stress_match=0.9, novelty=0.9,
-                          method_match=0.9, credibility=0.9)
-    profile = _profile()
-    assert high.weighted_score(profile) > low.weighted_score(profile)
+    low = RelevanceScore(facet_scores=dict.fromkeys(_PRIORITIES, 0.1), novelty=0.1, credibility=0.1)
+    high = RelevanceScore(facet_scores=dict.fromkeys(_PRIORITIES, 0.9), novelty=0.9, credibility=0.9)
+    assert high.weighted_score(_profile(), _PRIORITIES) > low.weighted_score(_profile(), _PRIORITIES)
+
+
+def test_score_paper_fills_overall(scorer):
+    sp = scorer.score_paper(_paper(title="Graphite capacity fade"), _profile(material=["graphite"]))
+    assert 0.0 < sp.relevance.overall <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -219,18 +200,12 @@ def test_weighted_score_higher_when_matching_dimensions_high():
 # ---------------------------------------------------------------------------
 
 def test_rank_papers_descending_by_overall(scorer):
-    def _sp(pid, overall):
-        sp = ScoredPaper(
-            paper=_paper(paper_id=pid),
-            relevance=RelevanceScore(overall=overall),
-        )
-        return sp
-
-    papers = [_sp("p1", 0.3), _sp("p2", 0.9), _sp("p3", 0.6)]
+    papers = [
+        ScoredPaper(paper=_paper(paper_id=pid), relevance=RelevanceScore(overall=o))
+        for pid, o in (("p1", 0.3), ("p2", 0.9), ("p3", 0.6))
+    ]
     ranked = scorer.rank_papers(papers)
-    scores = [sp.relevance.overall for sp in ranked]
-    assert scores == sorted(scores, reverse=True)
-    assert ranked[0].paper.paper_id == "p2"
+    assert [sp.paper.paper_id for sp in ranked] == ["p2", "p3", "p1"]
 
 
 def test_rank_papers_empty_list(scorer):

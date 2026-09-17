@@ -83,33 +83,24 @@ def chunk_paper(paper_id: str, sections: dict[str, str]) -> list[dict]:
 
 async def fetch_and_chunk_paper(
     paper_id: str,
-    source_value: str,
     fetcher,
 ) -> list[dict] | None:
-    """Fetch full text via the appropriate fetcher method, then chunk it.
+    """Fetch full text via the source's fetcher, then chunk it.
 
-    For EPMC-backed fetchers (PMC papers): calls fetch_full_text_structured,
-    which preserves section boundaries.
-    For arXiv: falls back to fetch_full_text (plain HTML), labelled "other".
-    Returns None for paywalled papers, non-PMC/non-arXiv sources, or fetch failures.
+    Fetchers that can return sectioned text (``fetch_full_text_structured``)
+    are chunked by section and nothing else is tried; the others fall back to
+    ``fetch_full_text`` (plain text, labelled "other").
+    Returns None for paywalled papers or fetch failures.
     """
-    from utils.source_fetchers import SourceType
-
-    try:
-        source = SourceType(source_value)
-    except ValueError:
-        return None
-
     if hasattr(fetcher, "fetch_full_text_structured"):
         sections = await fetcher.fetch_full_text_structured(paper_id)
         if sections:
             logger.debug("Chunking %s via structured XML (%d sections)", paper_id, len(sections))
             return chunk_paper(paper_id, sections)
+        return None
 
-    if source == SourceType.ARXIV:
-        text = await fetcher.fetch_full_text(paper_id)
-        if text:
-            logger.debug("Chunking %s via arXiv plain text", paper_id)
-            return chunk_paper(paper_id, {"other": text})
-
+    text = await fetcher.fetch_full_text(paper_id)
+    if text:
+        logger.debug("Chunking %s via plain full text", paper_id)
+        return chunk_paper(paper_id, {"other": text})
     return None

@@ -1,7 +1,13 @@
 # Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""Dynamic query generation for literature mining."""
+"""Dynamic query generation for literature mining.
+
+A query holds one term from each *query facet* of the active domain pack
+(facets with role ``subject`` or ``condition``), in declaration order.  The
+researcher's facet selections are crossed, and each term is widened into an
+OR-group of LLM-provided synonyms.
+"""
 
 from __future__ import annotations
 
@@ -12,15 +18,11 @@ from itertools import product as cartesian
 
 import litellm
 
+from domains import DomainPack, Facet, current_domain, term_text
 from utils.json_utils import parse_json_response
-from utils.source_fetchers import SOURCE_REGISTRY
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
-from models.schemas import (
-    ResearcherProfile,
-    SearchQuery,
-    SourceType,
-)
+from models.schemas import ResearcherProfile, SearchQuery
 
 logger = logging.getLogger(__name__)
 
@@ -35,38 +37,31 @@ _AND = " AND "
 # ──────────────────────────────────────────────────────────────────────────────
 
 _LLM_SYNONYM_PROMPT = """\
-You are a plant biology expert. List synonyms and closely related search terms for
-these species and stresses. Terms must appear in scientific paper titles or abstracts.
+You are a {field} expert. List synonyms and closely related search terms for
+the terms below. Terms must appear in scientific paper titles or abstracts.
 
-Species: {species}
-Stress types: {stresses}
+{term_lines}
 
 Return ONLY valid JSON (no markdown):
 {{
-  "species": {{
-    "<name>": ["<scientific_name>", "<genus>"],
+  "<facet key>": {{
+    "<term>": ["<synonym>", "<synonym>", ...],
     ...
   }},
-  "stresses": {{
-    "<stress_value>": ["<term1>", "<term2>", "<term3>", "<term4>"],
-    ...
-  }}
+  ...
 }}
 
 Rules:
-- Species: 2-3 synonyms (scientific name, genus, common variants).
-- Stresses: 4-6 synonyms — mechanisms, phenotypes, specific ions.
-  heavy_metal  → cadmium, zinc, nickel, lead, copper, metal stress, phytoremediation
-  drought      → water deficit, water stress, osmotic stress, ABA, stomatal conductance
-  salinity     → salt stress, NaCl, osmotic stress, ion toxicity
-  temperature  → heat stress, cold stress, thermotolerance, chilling injury
-  nutrient     → nitrogen, phosphorus, nutrient deficiency, fertilization
-- Do NOT include years, date ranges, or non-biological terms.
+{rules}
+- Do NOT include years or date ranges.{extra_rules}
 """
 
-# Bioinformatics framing injected into the stress group for arXiv queries.
-# arXiv covers computational/quantitative biology; plant physiology terms return 0.
-_ARXIV_BIO_TERMS = ["transcriptome", "RNA-seq", "gene expression", "GWAS", "genomics"]
+
+def _selected(profile: ResearcherProfile, facet: Facet, *, use_default: bool) -> list[str]:
+    values = profile.terms(facet.key)
+    if values or not use_default or not facet.query_default:
+        return values
+    return [facet.query_default]
 
 
 class QueryGenerator:
@@ -80,12 +75,12 @@ class QueryGenerator:
     Falls back to ``generate_queries`` on any error.
     """
 
-    OPEN_ACCESS_SOURCES = frozenset(
-        src for src, info in SOURCE_REGISTRY.items() if info.access == "open"
-    )
-    PAYWALL_SOURCES = frozenset(
-        src for src, info in SOURCE_REGISTRY.items() if info.access == "paywall"
-    )
+    def __init__(self, domain: DomainPack | None = None) -> None:
+        self._domain = domain
+
+    @property
+    def domain(self) -> DomainPack:
+        return self._domain or current_domain()
 
     # ── public sync API (preview / registration count) ────────────────────────
 
@@ -95,7 +90,7 @@ class QueryGenerator:
         *,
         max_queries_per_source: int = 5,
     ) -> list[SearchQuery]:
-        """Cross-product fallback — species × stress, one query per combination."""
+        """Cross-product fallback — one query per combination of query-facet terms."""
         base_combos = self._build_base_combinations(profile)
         modifiers = self._build_modifiers(profile)
         queries: list[SearchQuery] = []
@@ -123,7 +118,7 @@ class QueryGenerator:
     ) -> list[SearchQuery]:
         """Synonym-expansion + code-built OR-group queries.
 
-        Step 1: ask the LLM for a synonym map (species synonyms + stress synonyms).
+        Step 1: ask the LLM for a synonym map for every expandable query facet.
         Step 2: build OR-group SearchQuery objects deterministically in code.
 
         The LLM only handles what it does reliably (listing synonyms); all query
@@ -133,12 +128,11 @@ class QueryGenerator:
         synonyms = await self._expand_synonyms(profile)
         queries = self._build_from_synonyms(profile, synonyms, max_queries_per_source)
         if queries:
-            allowed = self._allowed_sources(profile)
             logger.info(
                 "Generated %d queries for %s across %s",
                 len(queries),
                 profile.researcher_id,
-                [s.value for s in allowed],
+                sorted(self._allowed_sources(profile)),
             )
             return queries
         logger.warning(
@@ -149,16 +143,36 @@ class QueryGenerator:
 
     # ── private helpers ───────────────────────────────────────────────────────
 
+    def _synonym_prompt(self, profile: ResearcherProfile) -> str | None:
+        facets = [f for f in self.domain.query_facets if f.synonyms > 0]
+        if not facets:
+            return None
+        term_lines = "\n".join(
+            f"{f.label} ({f.key}): "
+            + (", ".join(_selected(profile, f, use_default=True)) or "any")
+            for f in facets
+        )
+        rules = "\n".join(
+            f"- {f.key}: {f.synonym_guidance or f'up to {f.synonyms} synonyms.'}"
+            for f in facets
+        )
+        extra = self.domain.prompts.synonym_rules
+        return _LLM_SYNONYM_PROMPT.format(
+            field=self.domain.prompts.field,
+            term_lines=term_lines,
+            rules=rules,
+            extra_rules=f"\n- {extra}" if extra else "",
+        )
+
     async def _expand_synonyms(self, profile: ResearcherProfile) -> dict:
-        """Call the LLM to get a synonym map. Returns empty dicts on failure."""
+        """Call the LLM to get a {facet: {term: [synonyms]}} map. Empty on failure."""
+        prompt = self._synonym_prompt(profile)
+        if prompt is None:
+            return {}
         try:
             llm_kwargs = get_llm_config(profile.researcher_id).for_scoring()
         except LLMNotConfiguredError:
             return {}
-        prompt = _LLM_SYNONYM_PROMPT.format(
-            species=", ".join(profile.plant_species) or "plant",
-            stresses=", ".join(s.value for s in profile.stress_types) or "stress",
-        )
         try:
             response = await litellm.acompletion(
                 **llm_kwargs,
@@ -191,29 +205,30 @@ class QueryGenerator:
     ) -> list[SearchQuery]:
         """Build OR-group SearchQuery objects from the LLM synonym map.
 
-        For each (source, species, stress) triple we construct:
-          term_groups = [
-            [species, *species_synonyms],       ← OR-joined by the fetcher
-            [stress_str, *stress_synonyms],     ← OR-joined by the fetcher
-          ]
-        arXiv gets bioinformatics synonyms in group 2 instead of physiology terms.
+        For each source and each combination of query-facet terms we build one
+        OR-group per facet: ``[term, *synonyms]``.  The researcher's keywords
+        widen the last group.  Subject facets fall back to their default term
+        when nothing is selected; other facets must be selected — an empty one
+        yields no queries, and the caller falls back to the cross-product.
         """
-        allowed = self._allowed_sources(profile)
+        facets = self.domain.query_facets
         modifiers = self._build_modifiers(profile)
-        sp_syns: dict = synonyms.get("species", {})
-        st_syns: dict = synonyms.get("stresses", {})
         kws = [k for k in (profile.expertise_keywords or []) if k][:3]
+        selections = [
+            _selected(profile, f, use_default=f.role == "subject") for f in facets
+        ]
         queries: list[SearchQuery] = []
 
-        for source in allowed:
-            count = 0
-            for species, stress in cartesian(
-                profile.plant_species or ["plant"],
-                profile.stress_types or [],
-            ):
+        for source in self._allowed_sources(profile):
+            override = self.domain.sources[source].synonym_override
+            for count, combo in enumerate(cartesian(*selections)):
                 if count >= max_per_source:
                     break
-                term_groups = self._term_groups(source, species, stress, sp_syns, st_syns, kws)
+                last = len(facets) - 1
+                term_groups = [
+                    self._term_group(facet, value, synonyms, kws if i == last else [], override)
+                    for i, (facet, value) in enumerate(zip(facets, combo))
+                ]
                 flat = [grp[0] for grp in term_groups]
                 queries.append(SearchQuery(
                     query_string=_AND.join(
@@ -225,40 +240,38 @@ class QueryGenerator:
                     term_groups=term_groups,
                     contextual_modifiers=modifiers,
                 ))
-                count += 1
 
         return queries
 
-    def _term_groups(
-        self,
-        source: SourceType,
-        species: str,
-        stress,
-        sp_syns: dict,
-        st_syns: dict,
+    @staticmethod
+    def _term_group(
+        facet: Facet,
+        value: str,
+        synonyms: dict,
         kws: list[str],
-    ) -> list[list[str]]:
-        """Build the two OR-groups for one (source, species, stress) triple."""
-        sp_group = [species] + [s for s in sp_syns.get(species, []) if s][:2]
-        st_str = stress.value.replace("_", " ")
-        extra = [s for s in st_syns.get(stress.value, []) if s][:4]
-        if source == SourceType.ARXIV:
-            # arXiv: use profile keywords when available, otherwise bioinformatics terms
-            bio = [t for t in _ARXIV_BIO_TERMS if t not in extra]
-            st_group = [st_str] + (kws or bio)[:4]
-        else:
-            # Stress synonyms first, then profile keywords to widen the OR group
-            st_group = [st_str] + extra + [k for k in kws if k not in extra]
-        return [sp_group[:3], st_group[:5]]
+        override: tuple[str, ...],
+    ) -> list[str]:
+        """OR-group for one facet term: the term, its synonyms, then keywords."""
+        head = term_text(value)
+        syns = [s for s in synonyms.get(facet.key, {}).get(value, []) if s][:facet.synonyms]
+        if override and facet.role != "subject":
+            # This source covers different ground: keywords or the source's own
+            # terms replace the synonyms.
+            extra = [t for t in override if t not in syns]
+            return ([head] + (kws or extra)[:4])[:facet.group_size]
+        return ([head] + syns + [k for k in kws if k not in syns])[:facet.group_size]
 
-    def _allowed_sources(self, profile: ResearcherProfile) -> set[SourceType]:
-        allowed = {SourceType(s) for s in (profile.source_targets or [])}
-        return allowed or {s for s in SourceType if s != SourceType.OTHER}
+    def _allowed_sources(self, profile: ResearcherProfile) -> set[str]:
+        known = self.domain.sources
+        allowed = {s for s in (profile.source_targets or []) if s in known}
+        return allowed or set(known)
 
     def _build_base_combinations(self, profile: ResearcherProfile) -> list[list[str]]:
-        species = profile.plant_species or ["plant"]
-        stresses = [s.value.replace("_", " ") for s in profile.stress_types] or ["stress"]
-        combos = [list(c) for c in cartesian(species, stresses)]
+        selections = [
+            [term_text(v) for v in _selected(profile, f, use_default=True)]
+            for f in self.domain.query_facets
+        ]
+        combos = [list(c) for c in cartesian(*selections)]
         combos.sort(key=lambda c: len(" ".join(c)), reverse=True)
         return combos
 

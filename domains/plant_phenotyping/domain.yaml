@@ -1,0 +1,204 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Domain pack: plant phenotyping at the Advanced Plant Phenotyping Laboratory
+# (APPL, ORNL).  See docs/DOMAIN_PACKS.md for the format.
+
+name: plant_phenotyping
+title: Plant phenotyping (APPL)
+
+# ── Profile facets ───────────────────────────────────────────────────────────
+# role: subject | condition  → combined into search queries (one term each)
+#       technique            → scored only, weighted by the "methodology" priority
+facets:
+  - key: species
+    label: Plant Species
+    short_label: Species
+    role: subject
+    widget: cards
+    annotate: true
+    query_default: plant
+    synonyms: 2
+    group_size: 3
+    description: how well this paper's organisms match the researcher's species
+    synonym_guidance: 2-3 synonyms (scientific name, genus, common variants).
+    vocabulary:
+      - {value: poplar,       label: Poplar,       detail: Populus spp.,            aliases: [poplar, populus]}
+      - {value: pennycress,   label: Pennycress,   detail: Thlaspi arvense,         aliases: [pennycress, thlaspi]}
+      - {value: arabidopsis,  label: Arabidopsis,  detail: Arabidopsis thaliana,    aliases: [arabidopsis]}
+      - {value: soybean,      label: Soybean,      detail: Glycine max,             aliases: [soybean, glycine max]}
+      - {value: sorghum,      label: Sorghum,      detail: Sorghum bicolor,         aliases: [sorghum]}
+      - {value: switchgrass,  label: Switchgrass,  detail: Panicum virgatum,        aliases: [switchgrass, panicum virgatum]}
+      - {value: miscanthus,   label: Miscanthus,   detail: "Miscanthus × giganteus", aliases: [miscanthus]}
+      - {value: brachypodium, label: Brachypodium, detail: Brachypodium distachyon, aliases: [brachypodium]}
+
+  - key: stress
+    label: Stress Types
+    short_label: Stress
+    role: condition
+    annotate: true
+    open_vocabulary: false
+    query_default: stress
+    synonyms: 4
+    group_size: 5
+    description: how well the paper's stresses match
+    synonym_guidance: |
+      4-6 synonyms — mechanisms, phenotypes, specific ions.
+        heavy_metal  → cadmium, zinc, nickel, lead, copper, metal stress, phytoremediation
+        drought      → water deficit, water stress, osmotic stress, ABA, stomatal conductance
+        salinity     → salt stress, NaCl, osmotic stress, ion toxicity
+        temperature  → heat stress, cold stress, thermotolerance, chilling injury
+        nutrient     → nitrogen, phosphorus, nutrient deficiency, fertilization
+    hints:
+      template: "Paper explores {term} stress — consider combining with your {selected} focus"
+      terms: [drought, nutrient, temperature, pathogen, heavy metal, salinity, light, flooding]
+    vocabulary:
+      - {value: drought,     label: Drought,     icon: "💧", aliases: [drought, water deficit, water stress, osmotic stress]}
+      - {value: nutrient,    label: Nutrient,    icon: "🧪", aliases: [nutrient, nitrogen, phosphorus, fertiliz]}
+      - {value: temperature, label: Temperature, icon: "🌡️", aliases: [temperature, heat stress, cold stress, thermotoler]}
+      - {value: pathogen,    label: Pathogen,    icon: "🦠", aliases: [pathogen, disease resistance, fungal, bacterial]}
+      - {value: heavy_metal, label: Heavy Metal, icon: "⚗️", aliases: [heavy metal, cadmium, zinc toxicity, metal stress]}
+      - {value: salinity,    label: Salinity,    icon: "🧂", aliases: [salin, salt stress, nacl]}
+      - {value: light,       label: Light,       icon: "☀️", aliases: [light stress, photoinhibition, shade, photoperiod]}
+      - {value: flooding,    label: Flooding,    icon: "🌊", aliases: [flood, waterlog, submerg, anaerobic]}
+      - {value: ozone,       label: Ozone,       hidden: true}
+      - {value: mechanical,  label: Mechanical,  hidden: true}
+
+  # The phenotyping methods describe the facility, not the researcher: the
+  # dashboard always submits every visible method.
+  - key: method
+    label: Phenotyping Methods
+    short_label: Method
+    role: technique
+    widget: none
+    select_all: true
+    open_vocabulary: false
+    description: how well the paper's methods match the available instruments
+    sort:
+      label: Method Fit
+      title: How well the paper's methods match your available instruments
+    hints:
+      template: "Paper uses {term} — could complement your {selected} approach"
+      terms: [hyperspectral, thermal, fluorescence, root imaging, lidar, multispectral, gas exchange]
+    vocabulary:
+      - {value: hyperspectral_imaging,    label: Hyperspectral Imaging,    icon: "🌈"}
+      - {value: rgb_imaging,              label: RGB Imaging,              icon: "📷"}
+      - {value: thermal_imaging,          label: Thermal Imaging,          icon: "🔥"}
+      - {value: chlorophyll_fluorescence, label: Chlorophyll Fluorescence, icon: "🔬"}
+      - {value: root_imaging,             label: Root Imaging,             icon: "🌱"}
+      - {value: lidar,                    label: LiDAR,                    hidden: true}
+      - {value: multispectral_imaging,    label: Multispectral Imaging,    hidden: true}
+      - {value: gravimetric,              label: Gravimetric,              hidden: true}
+      - {value: gas_exchange,             label: Gas Exchange,             hidden: true}
+      - {value: other,                    label: Other,                    hidden: true}
+
+# ── Literature sources ───────────────────────────────────────────────────────
+# backend: europepmc (option: filter) | arxiv — packs may register more in hooks.py
+sources:
+  - {key: biorxiv, label: bioRxiv, backend: europepmc, filter: "SRC:PPR",
+     access: open, impact: low, preprint: true,
+     description: "Preprints — daily scan, full text"}
+  - {key: pubmed, label: PubMed, backend: europepmc, filter: "SRC:MED",
+     access: paywall, impact: low,
+     description: "Abstracts & citation data"}
+  - {key: frontiers, label: Frontiers, backend: europepmc, filter: 'PUBLISHER:"Frontiers Media SA"',
+     access: open, impact: mid,
+     description: "Open access — RSS feeds"}
+  - {key: plos_one, label: PLoS ONE, backend: europepmc, filter: 'JOURNAL:"PLOS ONE"',
+     access: open, impact: mid,
+     description: "Open access — weekly scan"}
+  - {key: nature_communications, label: Nature Comms, backend: europepmc, filter: 'JOURNAL:"Nature Communications"',
+     access: paywall, impact: high,
+     description: "High-impact — abstracts only"}
+  - {key: new_phytologist, label: New Phytologist, backend: europepmc, filter: 'JOURNAL:"New Phytologist"',
+     access: paywall, impact: high,
+     description: "Plant science — abstracts"}
+  - {key: plant_physiology, label: Plant Physiology, backend: europepmc, filter: 'JOURNAL:"Plant Physiology"',
+     access: paywall, impact: high,
+     description: "Plant science — abstracts"}
+  # arXiv covers computational/quantitative biology: plant physiology synonyms
+  # return nothing there, so the condition group uses keywords or these terms.
+  - {key: arxiv, label: arXiv, backend: arxiv,
+     access: open, impact: low, preprint: true,
+     description: "Preprints — computational methods",
+     synonym_override: [transcriptome, RNA-seq, gene expression, GWAS, genomics]}
+
+credibility:
+  high_impact_journals:
+    - nature
+    - science
+    - cell
+    - nature communications
+    - new phytologist
+    - plant cell
+    - plant physiology
+    - the plant journal
+    - nature plants
+  mid_impact_journals:
+    - frontiers in plant science
+    - plos one
+    - bmc plant biology
+    - plant methods
+    - journal of experimental botany
+    - annals of botany
+
+# ── Prompt wording ───────────────────────────────────────────────────────────
+prompts:
+  field: plant biology
+  proposal_noun: experiment
+  theme_example: root-canopy coupling
+  citation_example: >-
+    Cd uptake in Brassica napus is dose-dependent up to 50 µM [P_a3f2], but VNIR
+    red-edge shifts have only been characterised at lower concentrations [P_91bc].
+    Combining these would test whether reflectance saturates above the linear uptake range.
+  contradiction_hint: species/condition difference
+  critique_subject: plant phenotyping experiment
+  synonym_rules: Do NOT include non-biological terms.
+  scoring_guidance: >-
+    Score "method" based on how well the paper's experimental methods can be
+    reproduced or extended using the researcher's available instruments. A paper
+    requiring equipment the researcher does not have should score lower.
+  fallback_query: plant biology stress response
+
+# ── Facility context (filled by the deployment) ──────────────────────────────
+context:
+  - key: instruments
+    label: Available instruments
+    env: FACILITY_EQUIPMENT
+    default: standard laboratory equipment
+
+# Extra list dimensions the critic reports alongside novelty/confounds/evidence.
+critique:
+  dimensions:
+    - key: feasibility_concerns
+      label: Practical concerns
+      description: >-
+        practical concerns beyond instrument availability (sample size, time
+        horizon, statistical power, ethics)
+
+# ── Dashboard strings ────────────────────────────────────────────────────────
+ui:
+  app_name: CASSIOPEIA
+  document_title: APPL Literature Mining
+  subtitle: Context-Aware Semantic Search for Inspiring Original Plant Experiments and Investigations at APPL
+  research_placeholder: >-
+    e.g. I want to explore how drought-induced changes in poplar root architecture
+    relate to above-ground spectral signatures...
+  anchor_placeholder: "10.1093/jxb/erx456  or  Poplar root architecture under drought"
+  keyword_examples: root architecture, nitrogen uptake, canopy reflectance
+  priority_descriptions:
+    relevance: Match to your species and stress focus
+    methodology: Alignment with your phenotyping methods
+
+# Field names used before domain packs existed; applied once to old databases.
+legacy:
+  facets:
+    plant_species: species
+    stress_types: stress
+    phenotyping_methods: method
+  scores:
+    species_match: species
+    stress_match: stress
+    method_match: method
+  context:
+    available_equipment: instruments

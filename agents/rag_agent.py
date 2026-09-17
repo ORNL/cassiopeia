@@ -8,7 +8,8 @@ This Academy agent is the sole writer to ChromaDB.  It:
 - Answers free-form questions via a LangGraph ReAct loop with a
   ``search_knowledge_base`` tool that queries ChromaDB
 - Provides raw semantic search results for the dashboard
-- Synthesises cross-paper experiment proposals with novelty checking
+- Synthesises cross-paper proposals with novelty checking
+- Runs the domain pack's proposal evaluators
 - Detects contradictions between retrieved papers
 - Finds papers similar to a user-supplied anchor DOI or title
 
@@ -26,17 +27,17 @@ import os
 from pathlib import Path
 from typing import Any, TypedDict
 
-import aiohttp
 import litellm
 
 litellm.drop_params = True
 
 from academy.agent import Agent, action
 
+from domains import DomainPack, current_domain, term_text
 from utils.json_utils import parse_json_response
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
-from utils.source_fetchers import _session as _aiohttp_session
+from utils.source_fetchers import get_fetcher, source_registry
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,37 @@ logger = logging.getLogger(__name__)
 def _proposal_id(suggestion: str) -> str:
     """Stable 16-char hex ID derived from the suggestion text."""
     return hashlib.sha256(suggestion.encode()).hexdigest()[:16]
+
+
+def build_combinations_prompt(
+    domain: DomainPack,
+    profile: dict,
+    context: str,
+    preference_block: str,
+    n_proposals: int,
+) -> str:
+    """Render the cross-paper synthesis prompt for a ``{"facets", "keywords"}`` profile."""
+    facets = profile.get("facets", {})
+    rows = [
+        (f.short_label or f.label,
+         ", ".join(term_text(v) for v in facets.get(f.key, [])) or "unspecified")
+        for f in domain.facets
+    ]
+    rows.append(("Keywords", ", ".join(profile.get("keywords", [])) or "none"))
+    width = max(len(label) for label, _ in rows)
+    prompts = domain.prompts
+    example = prompts.citation_example
+    return _COMBINATIONS_PROMPT.format(
+        field=prompts.field,
+        profile_lines="\n".join(f"  {label:<{width}} : {value}" for label, value in rows),
+        focus=" and ".join(f.label.lower() for f in domain.query_facets),
+        noun=prompts.proposal_noun,
+        citation_example=f"\nExample rationale:\n\"{example}\"\n" if example else "",
+        theme_example=prompts.theme_example,
+        context=context,
+        preference_block=preference_block,
+        n_proposals=n_proposals,
+    )
 
 
 # Bump this when the proposal dict shape changes in a breaking way:
@@ -60,39 +92,30 @@ _SUB_QUERY_TOP_K = 5
 
 
 _COMBINATIONS_PROMPT = """\
-You are a plant biology research strategist.
+You are a {field} research strategist.
 
 Researcher profile:
-  Species  : {species}
-  Stresses : {stresses}
-  Methods  : {methods}
-  Keywords : {keywords}
+{profile_lines}
 
-PRIORITY: focus your proposals on the species and stress types listed above. \
-Proposals that directly involve those organisms and conditions will be most \
-useful to this researcher. Use the keywords as additional lens — proposals \
-that combine the researcher's focus species/stresses with insights related \
-to those keywords are especially valuable.
+PRIORITY: focus your proposals on the {focus} listed above. Proposals that \
+directly involve them will be most useful to this researcher. Use the keywords \
+as an additional lens — proposals that combine the researcher's focus with \
+insights related to those keywords are especially valuable.
 
 {preference_block}\
 Below are abstracts from papers retrieved for this researcher. Each paper \
 header shows its exact paper_id — use these IDs when citing papers.
-Your task is to identify CROSS-PAPER synergies — novel experiment designs \
+Your task is to identify CROSS-PAPER synergies — novel {noun} designs \
 that combine findings, methods, or observations from MULTIPLE papers above.
 Do NOT just paraphrase a single paper.
 
 CITATION RULE — rationale field:
 In "rationale", every factual claim attributed to prior work must be followed \
 by a tag of the form [paper_id] referring to one of the supporting papers. \
-Claims about what the *proposed* experiment would discover or test do NOT need \
+Claims about what the *proposed* {noun} would discover or test do NOT need \
 tags — only claims about what is already known. If a claim cannot be tied to a \
 specific paper in the provided set, do not make it.
-
-Example rationale:
-"Cd uptake in Brassica napus is dose-dependent up to 50 µM [P_a3f2], but VNIR \
-red-edge shifts have only been characterised at lower concentrations [P_91bc]. \
-Combining these would test whether reflectance saturates above the linear uptake range."
-
+{citation_example}
 KEY INSIGHTS RULE:
 "key_insights" must be a list where each entry is a dict with exactly two keys: \
 "paper_id" (the exact ID from the paper header) and "insight" \
@@ -104,8 +127,8 @@ Return a JSON object with a "proposals" array of {n_proposals} items:
 {{
   "proposals": [
     {{
-      "theme": "<2-4 word label, e.g. 'root-canopy coupling'>",
-      "suggestion": "<one concrete experiment proposal, 1-2 sentences>",
+      "theme": "<2-4 word label, e.g. '{theme_example}'>",
+      "suggestion": "<one concrete {noun} proposal, 1-2 sentences>",
       "rationale": "<why combining these papers is promising, with [paper_id] tags on factual claims>",
       "key_insights": [
         {{"paper_id": "<exact paper_id from header>", "insight": "<specific finding from that paper, 1 sentence>"}},
@@ -121,7 +144,7 @@ Paper abstracts:
 """
 
 _CONTRADICTION_PROMPT = """\
-You are a critical plant biology reviewer.
+You are a critical {field} reviewer.
 
 Below are abstracts from {n} papers retrieved for the same researcher profile.
 Each paper is labelled with its exact paper_id on the header line.
@@ -136,7 +159,7 @@ Return a JSON object:
       "papers": ["<exact paper_id from header>", "<exact paper_id from header>"],
       "claim_a": "<what the first paper asserts, 1 sentence>",
       "claim_b": "<what the second paper asserts that contradicts it, 1 sentence>",
-      "resolution_hint": "<possible explanation for the discrepancy, e.g. species/condition difference, 1 sentence>"
+      "resolution_hint": "<possible explanation for the discrepancy, e.g. {hint}, 1 sentence>"
     }}
   ]
 }}
@@ -146,37 +169,6 @@ If no contradictions are found return {{"contradictions": []}}.
 
 Paper abstracts:
 {context}
-"""
-
-_FEASIBILITY_PROMPT = """\
-You are an expert in plant phenotyping experimental design.
-
-A researcher at a high-throughput plant phenotyping facility has proposed the \
-following experiment. Assess whether it is executable given the instruments \
-available at the facility.
-
-Available instruments:
-{equipment}
-
-Proposed experiment:
-{suggestion}
-
-Assess feasibility on three axes:
-1. Whether the required measurements can be made with the available instruments \
-   (possibly under different names or synonyms — e.g. "canopy reflectance" maps \
-   to VNIR hyperspectral imaging).
-2. Whether any critical step requires equipment that is clearly absent.
-3. Whether any adaptation or workaround exists that would make the experiment \
-   executable with the available instruments.
-
-Return a single JSON object:
-{{
-  "feasible": <true | false | "partial">,
-  "confidence": <float 0-1>,
-  "missing_equipment": ["<item>", ...],
-  "adaptation": "<short description of any workaround, or empty string if fully feasible>",
-  "note": "<1-2 sentence plain-language summary>"
-}}
 """
 
 _GAP_IDENTIFICATION_PROMPT = """\
@@ -217,7 +209,7 @@ Previous draft proposals:
 
 class SynthesisState(TypedDict):
     """State for the Augmentation C iterative synthesis graph."""
-    profile: dict                   # researcher profile: species, stresses, methods, keywords
+    profile: dict                   # {"facets": {key: [values]}, "keywords": [...]}
     initial_papers: list[dict]      # top-N from initial retrieval: {paper_id, document}
     additional_papers: list[dict]   # accumulated across sub-queries, deduped
     draft_proposals: list[dict]     # best proposals from most recent propose step
@@ -240,7 +232,7 @@ class RAGAgent(Agent):
     - index_new_papers         — sync un-indexed papers from SQLite → ChromaDB
     - query                    — return raw semantic search hits
     - synthesize_combinations  — cross-paper experiment proposals
-    - assess_feasibility       — annotate proposals with equipment feasibility
+    - evaluate_proposals       — run the domain pack's proposal evaluators
     - detect_contradictions    — find conflicting claims across papers
     - find_similar_to_anchor   — semantic search seeded from a DOI/title
     - synthesize               — answer a free-form question via LangGraph ReAct
@@ -347,18 +339,11 @@ class RAGAgent(Agent):
     ) -> list[dict] | None:
         """Fetch and chunk full text for one paper. Returns None for paywalled papers."""
         from utils.chunker import fetch_and_chunk_paper
-        from utils.source_fetchers import get_fetcher, SourceType, FETCHER_REGISTRY
 
-        source_str = data.get("source", "other")
-        try:
-            source = SourceType(source_str)
-        except ValueError:
+        source = data.get("source", "")
+        if source not in source_registry():
             return None
-        if source not in FETCHER_REGISTRY:
-            return None
-
-        fetcher = get_fetcher(source)
-        return await fetch_and_chunk_paper(paper_id, source_str, fetcher)
+        return await fetch_and_chunk_paper(paper_id, get_fetcher(source))
 
     @action
     async def query(
@@ -517,19 +502,17 @@ class RAGAgent(Agent):
     async def synthesize_combinations(
         self,
         researcher_id: str,
-        species: list[str],
-        stresses: list[str],
-        methods: list[str],
+        facets: dict[str, list[str]],
         keywords: list[str] | None = None,
         n_papers: int = 12,
         n_proposals: int = 5,
         liked_proposals: list[dict] | None = None,
         with_critique: bool = False,
-        instruments: list[str] | None = None,
+        context: dict[str, list[str]] | None = None,
         max_iterations: int = _MAX_ITERATIONS,
         chunk_budget_per_paper: int = 1200,
     ) -> list[dict[str, Any]]:
-        """Generate cross-paper experiment proposals by reasoning over multiple abstracts.
+        """Generate cross-paper proposals by reasoning over multiple abstracts.
 
         Unlike the per-paper hypotheses produced during scoring, this action:
         1. Ensures ChromaDB is up to date (calls ``index_new_papers`` first)
@@ -542,17 +525,15 @@ class RAGAgent(Agent):
 
         Args:
             researcher_id: Researcher to scope results to.
-            species: Plant species of interest.
-            stresses: Stress types of interest.
-            methods: Phenotyping methods of interest.
+            facets: Selected values per domain-pack facet.
             keywords: Additional free-text keywords.
             n_papers: Number of abstracts to retrieve from ChromaDB.
             liked_proposals: Previously liked proposals to avoid duplicating
                 and to steer the LLM towards unexplored territory.
             with_critique: When True, runs ``critique_proposals`` (Augmentation D)
                 before returning. Default False — existing callers are unaffected.
-            instruments: Available facility instruments, forwarded to the critic
-                for feasibility_concerns assessment. Only used when with_critique=True.
+            context: Profile context declared by the domain pack, forwarded to
+                the critic. Only used when with_critique=True.
             max_iterations: Number of propose → identify_gaps → retrieve iterations. 
                 ``0`` reverts to the pre-C single-shot behavior (one reasoning-model
                 call, no gap-finding loop). Default: ``_MAX_ITERATIONS`` (3).
@@ -581,7 +562,9 @@ class RAGAgent(Agent):
         if self._rag.count() == 0:
             return []
 
-        query_text = " ".join(species + stresses + methods + (keywords or []))
+        query_text = " ".join(
+            [term_text(v) for values in facets.values() for v in values] + (keywords or [])
+        )
         hits = self._rag_query(query_text, n_papers, researcher_id)
         if not hits:
             return []
@@ -593,16 +576,11 @@ class RAGAgent(Agent):
             {**h, "document": paper_text_by_id.get(h["paper_id"], h["document"])}
             for h in hits
         ]
-        profile = {
-            "species": species,
-            "stresses": stresses,
-            "methods": methods,
-            "keywords": keywords or [],
-        }
+        profile = {"facets": facets, "keywords": keywords or []}
 
         if max_iterations == 0:
             proposals = await self._single_shot_proposals(
-                hits, species, stresses, methods, keywords, liked_proposals, n_proposals, llm_r,
+                hits, profile, liked_proposals, n_proposals, llm_r,
             )
         else:
             proposals, extra = await self._iterative_proposals(
@@ -615,25 +593,20 @@ class RAGAgent(Agent):
             return []
         enriched = await self._enrich_proposals(proposals, researcher_id)
         return await self._annotate_proposals(
-            enriched, paper_text_by_id, with_critique, instruments or [], researcher_id, llm_s, llm_r,
+            enriched, paper_text_by_id, with_critique, context or {}, researcher_id, llm_s, llm_r,
         )
 
     async def _single_shot_proposals(
         self,
         hits: list[dict],
-        species: list[str],
-        stresses: list[str],
-        methods: list[str],
-        keywords: list[str] | None,
+        profile: dict,
         liked_proposals: list[dict] | None,
         n_proposals: int,
         llm_r: dict,
     ) -> list[dict] | None:
-        prompt = _COMBINATIONS_PROMPT.format(
-            species=", ".join(species) or "unspecified",
-            stresses=", ".join(stresses) or "unspecified",
-            methods=", ".join(methods) or "unspecified",
-            keywords=", ".join(keywords or []) or "none",
+        prompt = build_combinations_prompt(
+            current_domain(),
+            profile,
             context=self._format_context_blocks(hits),
             preference_block=self._build_preference_block(liked_proposals),
             n_proposals=n_proposals,
@@ -678,7 +651,7 @@ class RAGAgent(Agent):
         proposals: list[dict],
         paper_text_by_id: dict[str, str],
         with_critique: bool,
-        instruments: list[str],
+        context: dict[str, list[str]],
         researcher_id: str,
         llm_s: dict,
         llm_r: dict,
@@ -699,7 +672,7 @@ class RAGAgent(Agent):
 
         if with_critique:
             try:
-                proposals = await self.critique_proposals(proposals, researcher_id, instruments)
+                proposals = await self.critique_proposals(proposals, researcher_id, context)
             except Exception as exc:
                 logger.warning("Critique failed — proposals returned without it: %s", exc)
 
@@ -845,7 +818,7 @@ class RAGAgent(Agent):
         self,
         proposals: list[dict[str, Any]],
         researcher_id: str,
-        instruments: list[str] | None = None,
+        context: dict[str, list[str]] | None = None,
     ) -> list[dict[str, Any]]:
         """Annotate proposals with structured critique from a critic LLM (Augmentation D).
 
@@ -857,9 +830,7 @@ class RAGAgent(Agent):
         - ``confounds`` — specific experimental confounds and their severity.
         - ``evidence_strength`` — does the rationale stretch beyond what the cited
           papers actually show?
-        - ``feasibility_concerns`` — practical concerns *beyond* instrument
-          availability (sample size, time horizon, statistical power, ethics).
-          Instrument-level feasibility is handled separately by ``assess_feasibility``.
+        - one list per extra critique dimension declared by the domain pack.
         - ``overall_recommendation`` — pursue / refine / deprioritize.
         - ``summary`` — one-sentence overview of the critique.
 
@@ -869,23 +840,22 @@ class RAGAgent(Agent):
             proposals: List of proposal dicts from ``synthesize_combinations``.
                 Should already have ``verification`` attached.
             researcher_id: Used to load the active LLM config.
-            instruments: Available facility instruments for feasibility assessment.
+            context: Profile context declared by the domain pack.
         """
         try:
             llm_r = get_llm_config(researcher_id).for_reasoning()
         except LLMNotConfiguredError:
             return [{**p, "critique": None} for p in proposals]
 
-        _instruments = instruments or []
         critiques = await asyncio.gather(
-            *[self._critique_one_proposal(p, _instruments, llm_r) for p in proposals]
+            *[self._critique_one_proposal(p, context or {}, llm_r) for p in proposals]
         )
         return [{**p, "critique": c} for p, c in zip(proposals, critiques)]
 
     async def _critique_one_proposal(
         self,
         proposal: dict,
-        instruments: list[str],
+        context: dict[str, list[str]],
         llm_r: dict,
     ) -> dict | None:
         """Retrieve semantically similar papers, then run one critique call."""
@@ -903,7 +873,7 @@ class RAGAgent(Agent):
                 "document": hit["document"][:500],
             })
 
-        return await critique_proposal(proposal, similar_papers, instruments, llm_r)
+        return await critique_proposal(proposal, similar_papers, llm_r, context)
 
 
     async def _propose_node(self, state: dict) -> dict:
@@ -921,11 +891,9 @@ class RAGAgent(Agent):
             )
             refinement_block = _REFINEMENT_ADDENDUM.format(previous_proposals=prev)
 
-        prompt = _COMBINATIONS_PROMPT.format(
-            species=", ".join(profile.get("species", [])) or "unspecified",
-            stresses=", ".join(profile.get("stresses", [])) or "unspecified",
-            methods=", ".join(profile.get("methods", [])) or "unspecified",
-            keywords=", ".join(profile.get("keywords", [])) or "none",
+        prompt = build_combinations_prompt(
+            current_domain(),
+            profile,
             context=context,
             preference_block=preference_block,
             n_proposals=state.get("n_proposals", 5),
@@ -1087,83 +1055,45 @@ class RAGAgent(Agent):
         return True, ""
 
     @action
-    async def assess_feasibility(
+    async def evaluate_proposals(
         self,
         proposals: list[dict[str, Any]],
-        available_equipment: list[str],
-        researcher_id: str = "",
+        researcher_id: str,
+        context: dict[str, list[str]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Annotate experiment proposals with feasibility assessments.
+        """Annotate proposals with the domain pack's evaluators.
 
-        For each proposal the LLM checks whether the required measurements can
-        be made with the instruments listed in ``available_equipment``.  The
-        check is aware of synonyms (e.g. "canopy reflectance spectroscopy"
-        maps to VNIR hyperspectral imaging) and can suggest adaptations when
-        a partial match exists.
-
-        Args:
-            proposals: List of proposal dicts as returned by
-                ``synthesize_combinations``.  Each must have a ``suggestion``
-                key.  Other keys are passed through unchanged.
-            available_equipment: Flat list of instrument / capability names
-                that the facility provides (from the researcher profile).
-            researcher_id: Used to load the active LLM config.
-
-        Returns:
-            The same list of proposals, each extended with a ``feasibility``
-            dict containing keys: ``feasible``, ``confidence``,
-            ``missing_equipment``, ``adaptation``, ``note``.
+        Each evaluator that applies to ``context`` stores its result under
+        ``proposal[evaluator.key]`` (None when it fails).  Proposals are
+        returned unchanged when the pack has no applicable evaluator.
         """
-        if not proposals or not available_equipment:
-            for p in proposals:
-                p.setdefault("feasibility", None)
+        context = context or {}
+        evaluators = current_domain().active_evaluators(context)
+        if not proposals or not evaluators:
             return proposals
 
         try:
-            llm_r = get_llm_config(researcher_id).for_reasoning() if researcher_id else {}
+            llm_r = get_llm_config(researcher_id).for_reasoning()
         except LLMNotConfiguredError:
-            for p in proposals:
-                p.setdefault("feasibility", None)
-            return proposals
+            return [{**p, **{e.key: None for e in evaluators}} for p in proposals]
 
-        equipment_str = "\n".join(f"  - {e}" for e in available_equipment)
         results = []
         for proposal in proposals:
-            feasibility = await self._assess_one(proposal["suggestion"], equipment_str, llm_r)
-            results.append({**proposal, "feasibility": feasibility})
+            annotated = dict(proposal)
+            for evaluator in evaluators:
+                try:
+                    annotated[evaluator.key] = await evaluator.evaluate(proposal, context, llm_r)
+                except Exception as exc:
+                    logger.warning("Proposal evaluator %s failed: %s", evaluator.key, exc)
+                    annotated[evaluator.key] = None
+            results.append(annotated)
         return results
-
-    async def _assess_one(self, suggestion: str, equipment_str: str, llm_r: dict) -> dict[str, Any]:
-        """Run the feasibility LLM call for a single proposal."""
-        prompt = _FEASIBILITY_PROMPT.format(
-            equipment=equipment_str,
-            suggestion=suggestion,
-        )
-        try:
-            response = await litellm.acompletion(
-                **llm_r,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
-                response_format={"type": "json_object"},
-                temperature=0.1,
-                timeout=120,
-            )
-            raw = response.choices[0].message.content.strip()
-            return parse_json_response(raw)
-        except (litellm.APIError, json.JSONDecodeError) as exc:
-            logger.warning("assess_feasibility failed for proposal: %s", exc)
-            return {
-                "feasible": None,
-                "confidence": 0.0,
-                "missing_equipment": [],
-                "adaptation": "",
-                "note": "Assessment unavailable.",
-            }
 
     async def _contradiction_pass(
         self, query: str, n_papers: int, where: dict | None, llm_r: dict
     ) -> list[dict]:
         """Run one contradiction-detection LLM call over papers matching ``query``."""
+        domain = current_domain()
         hits = self._rag.query(query, n_results=n_papers, where=where)
         if len(hits) < 2:
             return []
@@ -1187,7 +1117,12 @@ class RAGAgent(Agent):
         try:
             response = await litellm.acompletion(
                 **llm_r,
-                messages=[{"role": "user", "content": _CONTRADICTION_PROMPT.format(n=len(hits), context=context)}],
+                messages=[{"role": "user", "content": _CONTRADICTION_PROMPT.format(
+                    field=domain.prompts.field,
+                    hint=domain.prompts.contradiction_hint,
+                    n=len(hits),
+                    context=context,
+                )}],
                 max_tokens=1200,
                 response_format={"type": "json_object"},
                 temperature=0.2,
@@ -1232,12 +1167,13 @@ class RAGAgent(Agent):
         if self._rag.count() == 0:
             return []
 
+        domain   = current_domain()
         profile  = self._store.load_profile(researcher_id) or {}
+        facets   = profile.get("facets", {})
         terms    = (
-            list(profile.get("plant_species", []))
-            + [s.replace("_", " ") for s in profile.get("stress_types", [])]
+            [term_text(v) for f in domain.query_facets for v in facets.get(f.key, [])]
             + profile.get("expertise_keywords", [])[:4]
-        ) or ["plant biology stress response"]
+        ) or [domain.prompts.fallback_query or domain.prompts.field]
         queries  = (terms * n_passes)[:n_passes]
         where    = self._collection_filter(researcher_id)
 
@@ -1266,13 +1202,12 @@ class RAGAgent(Agent):
     ) -> list[dict[str, Any]]:
         """Find papers semantically similar to an anchor paper.
 
-        Fetches the abstract of the anchor paper from Europe PMC using the
-        supplied DOI or title string, then uses that abstract as a ChromaDB
-        query seed.
+        Resolves the abstract of the anchor paper through the domain pack's
+        source backends using the supplied DOI or title string, then uses that
+        abstract as a ChromaDB query seed.
 
         Args:
-            doi_or_title: A DOI (e.g. ``10.1093/jxb/erx456``) or a free-text
-                title fragment to look up via Europe PMC.
+            doi_or_title: A DOI or a free-text title fragment.
             researcher_id: If given, restrict results to that researcher's papers.
             n_results: Maximum number of similar papers to return.
 
@@ -1305,34 +1240,16 @@ class RAGAgent(Agent):
         return results
 
     async def _fetch_anchor_abstract(self, doi_or_title: str) -> str:
-        """Resolve a DOI or title to an abstract via Europe PMC."""
-        is_doi = doi_or_title.startswith("10.")
-        if is_doi:
-            query = f"DOI:{doi_or_title}"
-        else:
-            escaped = doi_or_title.replace('"', "")
-            query = f'TITLE:"{escaped}"'
-
-        url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-        params = {
-            "query": query,
-            "format": "json",
-            "pageSize": "1",
-            "resultType": "core",
-        }
-        try:
-            async with _aiohttp_session() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status != 200:
-                        return ""
-                    data = await resp.json()
-            results = data.get("resultList", {}).get("result", [])
-            if not results:
-                return ""
-            return results[0].get("abstractText") or results[0].get("title", "")
-        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
-            logger.warning("_fetch_anchor_abstract failed: %s", exc)
-            return ""
+        """Resolve a DOI or title to an abstract via the pack's source backends."""
+        tried: set[str] = set()
+        for info in source_registry().values():
+            if info.backend in tried:
+                continue
+            tried.add(info.backend)
+            abstract = await get_fetcher(info.key).lookup_abstract(doi_or_title)
+            if abstract:
+                return abstract
+        return ""
 
     @action
     async def synthesize(
@@ -1382,7 +1299,7 @@ class RAGAgent(Agent):
 
         @lc_tool
         def search_knowledge_base(query: str) -> str:
-            """Search the plant biology paper knowledge base for relevant passages."""
+            """Search the paper knowledge base for relevant passages."""
             hits = self._rag_query(query, 5, researcher_id)
             if not hits:
                 return "No relevant papers found."
@@ -1396,6 +1313,10 @@ class RAGAgent(Agent):
         model = llm_r.get("model", "")
         extra = {k: v for k, v in llm_r.items() if k != "model"}
         llm = ChatLiteLLM(model=model, temperature=0.3, **extra)
+        search_knowledge_base.description = (
+            f"Search the {current_domain().prompts.field} paper knowledge base "
+            "for relevant passages."
+        )
         agent = create_react_agent(llm, [search_knowledge_base])
 
         result = await agent.ainvoke(
@@ -1414,7 +1335,7 @@ class RAGAgent(Agent):
             f"[{h['title']}]\n{h['abstract_snippet']}" for h in hits
         )
         prompt = (
-            f"You are a plant biology research assistant. "
+            f"You are a {current_domain().prompts.field} research assistant. "
             f"Answer the following question based on these paper abstracts:\n\n"
             f"{context}\n\n"
             f"Question: {question}"

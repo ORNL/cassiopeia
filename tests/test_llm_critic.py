@@ -29,14 +29,13 @@ _GOOD_CRITIQUE = {
     "novelty": {"assessment": "novel", "reasoning": "No prior work found.", "closest_prior_work": None},
     "confounds": [],
     "evidence_strength": {"assessment": "well_supported", "reasoning": "Claims match abstracts."},
-    "feasibility_concerns": [],
     "overall_recommendation": "pursue",
     "summary": "Strong proposal.",
 }
 
 _PROPOSAL = {
-    "theme": "root-canopy coupling",
-    "suggestion": "Combine drought stress with VNIR imaging.",
+    "theme": "interface stability",
+    "suggestion": "Combine cycling data with DFT interface models.",
     "rationale": "Paper P1 shows X [P1].",
     "key_insights": [{"paper_id": "P1", "insight": "X was observed."}],
     "verification": {
@@ -61,7 +60,7 @@ _PROPOSAL = {
 async def test_critique_proposal_pursue():
     resp = _mock_response(_GOOD_CRITIQUE)
     with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=["VNIR"], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result["overall_recommendation"] == "pursue"
     assert result["summary"] == "Strong proposal."
 
@@ -71,7 +70,7 @@ async def test_critique_proposal_refine():
     payload = {**_GOOD_CRITIQUE, "overall_recommendation": "refine"}
     resp = _mock_response(payload)
     with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=["VNIR"], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result["overall_recommendation"] == "refine"
 
 
@@ -84,7 +83,7 @@ async def test_critique_proposal_deprioritize():
     }
     resp = _mock_response(payload)
     with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=[], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result["overall_recommendation"] == "deprioritize"
     assert len(result["confounds"]) == 1
 
@@ -97,7 +96,7 @@ async def test_critique_proposal_malformed_json_then_success():
     good_resp = _mock_response(_GOOD_CRITIQUE)
 
     with patch("litellm.acompletion", new=AsyncMock(side_effect=[bad_resp, good_resp])):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=[], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result is not None
     assert result["overall_recommendation"] == "pursue"
 
@@ -109,7 +108,7 @@ async def test_critique_proposal_persistent_failure():
     bad_resp.choices[0].message.content = "not json at all"
 
     with patch("litellm.acompletion", new=AsyncMock(return_value=bad_resp)):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=[], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result is None
 
 
@@ -117,7 +116,7 @@ async def test_critique_proposal_persistent_failure():
 async def test_critique_proposal_llm_exception():
     """LLM raises an exception — must return None."""
     with patch("litellm.acompletion", new=AsyncMock(side_effect=RuntimeError("timeout"))):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=[], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result is None
 
 
@@ -133,6 +132,54 @@ async def test_critique_proposal_missing_required_key():
     good_resp = _mock_response(_GOOD_CRITIQUE)
 
     with patch("litellm.acompletion", new=AsyncMock(side_effect=[bad_resp, good_resp])):
-        result = await critique_proposal(_PROPOSAL, similar_papers=[], instruments=[], llm_kwargs=_MOCK_LLM)
+        result = await critique_proposal(_PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM)
     assert result is not None
     assert result["overall_recommendation"] == "pursue"
+
+
+# ---------------------------------------------------------------------------
+# Domain-pack wording, context and extra dimensions
+# ---------------------------------------------------------------------------
+
+def _pack_with(**changes):
+    from dataclasses import replace
+
+    from domains import ContextSpec, CritiqueDimension, current_domain
+
+    defaults = {
+        "context_specs": (ContextSpec(key="beamlines", label="Beamlines"),),
+        "critique_dimensions": (
+            CritiqueDimension(key="safety_concerns", label="Safety", description="lab safety risks"),
+        ),
+    }
+    return replace(current_domain(), **{**defaults, **changes})
+
+
+def test_prompt_without_context_or_dimensions_has_no_extra_sections():
+    from domains import current_domain
+    from utils.llm_critic import build_critic_prompt
+
+    prompt = build_critic_prompt(_PROPOSAL, [], {}, current_domain())
+    assert "proposed battery materials study" in prompt
+    assert '"confounds"' in prompt
+    assert "feasibility" not in prompt
+    assert "instrument" not in prompt
+
+
+def test_prompt_renders_pack_context_and_dimensions():
+    from utils.llm_critic import build_critic_prompt
+
+    prompt = build_critic_prompt(_PROPOSAL, [], {"beamlines": ["BL-9"]}, _pack_with())
+    assert "Beamlines:\n  - BL-9" in prompt
+    assert '"safety_concerns": [' in prompt
+    assert "safety_concerns: lab safety risks." in prompt
+
+
+@pytest.mark.asyncio
+async def test_pack_dimensions_default_to_empty_lists():
+    resp = _mock_response(_GOOD_CRITIQUE)
+    with patch("litellm.acompletion", new=AsyncMock(return_value=resp)):
+        result = await critique_proposal(
+            _PROPOSAL, similar_papers=[], llm_kwargs=_MOCK_LLM, domain=_pack_with(),
+        )
+    assert result["safety_concerns"] == []

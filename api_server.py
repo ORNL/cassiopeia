@@ -1,7 +1,7 @@
 # Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""FastAPI bridge between the APPL dashboard and the Academy agents.
+"""FastAPI bridge between the dashboard and the Academy agents.
 
 Run with:
     uvicorn api_server:app --reload --port 8000
@@ -38,12 +38,12 @@ from academy.logging import init_logging
 from api.auth import router as auth_router
 from api.settings import router as settings_router
 from utils.auth import CurrentUser, assert_safe_configuration
-from models.schemas import ResearcherProfile, StressType
+from domains import current_domain
+from models.schemas import ResearcherProfile
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
-from utils.source_fetchers import SOURCE_REGISTRY
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 init_logging(logging.INFO)
@@ -92,6 +92,8 @@ async def lifespan(app: FastAPI):
 
     # Fail before serving a single request if auth is off on a public interface.
     assert_safe_configuration()
+    # Likewise if the domain pack is missing or malformed.
+    logger.info("Serving domain pack: %s", current_domain().name)
 
     scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
     db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
@@ -121,7 +123,7 @@ async def lifespan(app: FastAPI):
             await asyncio.gather(*pending, return_exceptions=True)
 
 
-app = FastAPI(title="APPL Literature Mining API", lifespan=lifespan)
+app = FastAPI(title="Cassiopeia Literature Mining API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,9 +149,8 @@ async def llm_not_configured_handler(request: Request, exc: LLMNotConfiguredErro
 
 
 class SearchRequest(BaseModel):
-    plant_species: list[str] = []
-    stress_types: list[str] = []
-    phenotyping_methods: list[str] = []
+    # facet key (from the domain pack) → selected values
+    facets: dict[str, list[str]] = {}
     expertise_keywords: list[str] = []
     priority_novelty: float = 0.5
     priority_relevance: float = 0.5
@@ -187,8 +188,7 @@ class KeywordExtractRequest(BaseModel):
 
 
 class PreviewQueriesRequest(BaseModel):
-    plant_species: list[str] = []
-    stress_types: list[str] = []
+    facets: dict[str, list[str]] = {}
     expertise_keywords: list[str] = []
     time_range_months: int = 12
 
@@ -238,9 +238,14 @@ async def extract_keywords(
         return {"keywords": []}
 
 
-_OPEN_SOURCES = frozenset(
-    src.value for src, info in SOURCE_REGISTRY.items() if info.access == "open"
-)
+@app.get("/api/domain")
+async def domain_manifest() -> dict[str, Any]:
+    """Describe the active domain pack: facets, sources, labels, evaluators.
+
+    Public on purpose — the landing page needs the pack's wording before login,
+    and the manifest holds no per-user data.
+    """
+    return current_domain().manifest()
 
 
 @app.post("/api/preview_queries")
@@ -248,12 +253,11 @@ async def preview_queries(
     req: PreviewQueriesRequest, user: CurrentUser
 ) -> list[dict[str, str]]:
     """Return the actual query strings that would be sent to each source."""
-    valid_stresses = [s for s in req.stress_types if s in StressType._value2member_map_]
+    domain = current_domain()
     profile = ResearcherProfile(
         researcher_id="preview",
         name="preview",
-        plant_species=req.plant_species,
-        stress_types=[StressType(s) for s in valid_stresses],
+        facets=domain.validate_facets(req.facets),
         expertise_keywords=req.expertise_keywords,
         time_range_months=req.time_range_months,
     )
@@ -264,11 +268,11 @@ async def preview_queries(
         if q.query_string in seen:
             continue
         seen.add(q.query_string)
-        src = q.source_target.value
+        src = q.source_target
         result.append({
             "query": q.query_string,
             "source": src,
-            "access_type": "open" if src in _OPEN_SOURCES else "paywall",
+            "access_type": domain.sources[src].access,
         })
     return result[:12]
 
@@ -289,9 +293,9 @@ def _n_proposals_for(papers_found: int) -> int:
 
 
 async def _run_rag_synthesis(
-    researcher_id: str, req: SearchRequest, equipment: list[str], n_proposals: int = 5
+    researcher_id: str, req: SearchRequest, context: dict[str, list[str]], n_proposals: int = 5
 ) -> list:
-    """Index papers, synthesise proposals (optionally with critique), and assess feasibility."""
+    """Index papers, synthesise proposals (optionally with critique), then run the pack's evaluators."""
     rag_combos: list = []
     try:
         _set_progress(researcher_id, "indexing", "Indexing papers into knowledge base…", 52)
@@ -321,29 +325,30 @@ async def _run_rag_synthesis(
         rag_combos = await _call(
             _rag_handle.synthesize_combinations(
                 researcher_id=researcher_id,
-                species=req.plant_species,
-                stresses=req.stress_types,
-                methods=req.phenotyping_methods,
+                facets=current_domain().validate_facets(req.facets),
                 keywords=req.expertise_keywords,
                 n_proposals=n_proposals,
                 liked_proposals=liked or None,
                 with_critique=req.with_critique,
-                instruments=equipment,
+                context=context,
                 max_iterations=req.max_iterations,
             )
         )
-        if rag_combos and equipment:
-            _set_progress(researcher_id, "feasibility", "Assessing equipment feasibility…", 90)
+        evaluators = current_domain().active_evaluators(context)
+        if rag_combos and evaluators:
+            _set_progress(
+                researcher_id, "evaluating", " ".join(e.label for e in evaluators), 90,
+            )
             await asyncio.sleep(0)
             rag_combos = await _call(
-                _rag_handle.assess_feasibility(
+                _rag_handle.evaluate_proposals(
                     proposals=rag_combos,
-                    available_equipment=equipment,
                     researcher_id=researcher_id,
+                    context=context,
                 )
             )
         logger.info(
-            "_run_rag_synthesis done — %d proposal(s) after synthesis + feasibility",
+            "_run_rag_synthesis done — %d proposal(s) after synthesis + evaluation",
             len(rag_combos),
         )
     except Exception as exc:
@@ -370,33 +375,6 @@ def _schedule_contradictions(researcher_id: str) -> None:
     run_in_context(_bg)
 
 
-_SPECIES_TERMS: dict[str, list[str]] = {
-    "poplar":       ["poplar", "populus"],
-    "pennycress":   ["pennycress", "thlaspi"],
-    "arabidopsis":  ["arabidopsis"],
-    "soybean":      ["soybean", "glycine max"],
-    "sorghum":      ["sorghum"],
-    "switchgrass":  ["switchgrass", "panicum virgatum"],
-    "miscanthus":   ["miscanthus"],
-    "brachypodium": ["brachypodium"],
-}
-
-_STRESS_TERMS: dict[str, list[str]] = {
-    "drought":      ["drought", "water deficit", "water stress", "osmotic stress"],
-    "nutrient":     ["nutrient", "nitrogen", "phosphorus", "fertiliz"],
-    "temperature":  ["temperature", "heat stress", "cold stress", "thermotoler"],
-    "pathogen":     ["pathogen", "disease resistance", "fungal", "bacterial"],
-    "heavy_metal":  ["heavy metal", "cadmium", "zinc toxicity", "metal stress"],
-    "salinity":     ["salin", "salt stress", "nacl"],
-    "light":        ["light stress", "photoinhibition", "shade", "photoperiod"],
-    "flooding":     ["flood", "waterlog", "submerg", "anaerobic"],
-}
-
-
-def _match_terms(haystack: str, key: str, term_map: dict[str, list[str]]) -> bool:
-    return any(t in haystack for t in term_map.get(key, [key]))
-
-
 def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]:
     """Load all stored papers for a researcher, sorted by relevance, plus per-paper combos.
 
@@ -409,6 +387,7 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
     if not scored:
         return [], []
     scored.sort(key=lambda sp: sp.relevance.overall, reverse=True)
+    domain = current_domain()
     added_at_map = _paper_store.get_added_at_map(researcher_id)
     papers: list[dict[str, Any]] = []
     for i, sp in enumerate(scored):
@@ -426,13 +405,11 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
             "doi": sp.paper.doi,
             "url": sp.paper.url,
             "published": sp.paper.published_date.isoformat() if sp.paper.published_date else None,
-            "source": sp.paper.source.value,
+            "source": sp.paper.source,
             "is_open_access": sp.paper.is_open_access,
             "scores": {
                 "overall": round(sp.relevance.overall, 3),
-                "species_match": round(sp.relevance.species_match, 3),
-                "stress_match": round(sp.relevance.stress_match, 3),
-                "method_match": round(sp.relevance.method_match, 3),
+                "facets": {k: round(v, 3) for k, v in sp.relevance.facet_scores.items()},
                 "recency": round(sp.relevance.recency, 3),
                 "credibility": round(sp.relevance.credibility, 3),
                 "novelty": round(sp.relevance.novelty, 3),
@@ -441,8 +418,7 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
             "credibility_level": sp.credibility.value,
             "credibility_icon": _CRED_ICONS.get(sp.credibility.value, "❓"),
             "suggested_combinations": sp.suggested_combinations,
-            "matched_species":  [s  for s  in _SPECIES_TERMS if _match_terms(haystack, s,  _SPECIES_TERMS)],
-            "matched_stresses": [st for st in _STRESS_TERMS  if _match_terms(haystack, st, _STRESS_TERMS)],
+            "matched": domain.annotate(haystack),
         })
     seen: set[str] = set()
     combos: list[dict[str, Any]] = []
@@ -455,29 +431,28 @@ def _load_papers_and_combos(researcher_id: str) -> tuple[list[dict], list[dict]]
                     "source_paper": p["title"],
                     "source_doi": p["doi"],
                     "paper_credibility": p["credibility_level"],
-                    "matched_species":  p.get("matched_species", []),
-                    "matched_stresses": p.get("matched_stresses", []),
+                    "matched": p["matched"],
                 })
     return papers, combos
 
 
 def _annotate_proposals(proposals: list[dict]) -> list[dict]:
-    """Add matched_species / matched_stresses to each RAG proposal via text matching."""
+    """Tag each RAG proposal with the facet vocabulary it mentions (for filtering)."""
+    domain = current_domain()
     for p in proposals:
-        text = " ".join(filter(None, [p.get("suggestion", ""), p.get("rationale", "")])).lower()
-        p["matched_species"]  = [s  for s  in _SPECIES_TERMS if _match_terms(text, s,  _SPECIES_TERMS)]
-        p["matched_stresses"] = [st for st in _STRESS_TERMS  if _match_terms(text, st, _STRESS_TERMS)]
+        text = " ".join(filter(None, [p.get("suggestion", ""), p.get("rationale", "")]))
+        p["matched"] = domain.annotate(text)
     return proposals
 
 
 def _annotate_contradictions(contradictions: list[dict]) -> list[dict]:
-    """Add matched_species / matched_stresses to each contradiction via text matching."""
+    """Tag each contradiction with the facet vocabulary it mentions (for filtering)."""
+    domain = current_domain()
     for c in contradictions:
         text = " ".join(filter(None, [
             c.get("claim_a", ""), c.get("claim_b", ""), c.get("resolution_hint", ""),
-        ])).lower()
-        c["matched_species"]  = [s  for s  in _SPECIES_TERMS if _match_terms(text, s,  _SPECIES_TERMS)]
-        c["matched_stresses"] = [st for st in _STRESS_TERMS  if _match_terms(text, st, _STRESS_TERMS)]
+        ]))
+        c["matched"] = domain.annotate(text)
     return contradictions
 
 
@@ -515,7 +490,7 @@ async def search_progress(user: CurrentUser) -> dict[str, Any]:
 async def _rag_synthesis_or_cached(
     researcher_id: str,
     req: SearchRequest,
-    equipment: list[str],
+    context: dict[str, list[str]],
     papers_found: int,
     n_proposals: int,
 ) -> list:
@@ -534,7 +509,7 @@ async def _rag_synthesis_or_cached(
     else:
         try:
             rag_combos = await asyncio.wait_for(
-                _run_rag_synthesis(researcher_id, req, equipment, n_proposals), timeout=600
+                _run_rag_synthesis(researcher_id, req, context, n_proposals), timeout=600
             )
             logger.info("RAG synthesis complete — %d proposals generated", len(rag_combos))
         except asyncio.TimeoutError:
@@ -552,21 +527,19 @@ async def search(req: SearchRequest, user: CurrentUser) -> dict[str, Any]:
 
     researcher_id = user.id
     logger.info(
-        "Search request — researcher=%s species=%s stresses=%s sources=%s",
-        researcher_id, req.plant_species, req.stress_types, req.source_targets,
+        "Search request — researcher=%s facets=%s sources=%s",
+        researcher_id, req.facets, req.source_targets,
     )
-    equipment = _facility_equipment()
+    context = current_domain().load_context()
 
     _set_progress(researcher_id, "registering", "Registering researcher profile…", 5)
     await asyncio.sleep(0)  # yield — let queued GET polls see this stage
     await _call(_mining_handle.register_researcher(
         researcher_id=researcher_id,
         name=user.display_name,
-        plant_species=req.plant_species,
-        stress_types=req.stress_types,
-        phenotyping_methods=req.phenotyping_methods,
+        facets=req.facets,
         expertise_keywords=req.expertise_keywords,
-        available_equipment=equipment,
+        context=context,
         priority_novelty=req.priority_novelty,
         priority_relevance=req.priority_relevance,
         priority_methodology=req.priority_methodology,
@@ -597,7 +570,7 @@ async def search(req: SearchRequest, user: CurrentUser) -> dict[str, Any]:
     )
 
     n_proposals = _n_proposals_for(papers_found)
-    rag_combos = await _rag_synthesis_or_cached(researcher_id, req, equipment, papers_found, n_proposals)
+    rag_combos = await _rag_synthesis_or_cached(researcher_id, req, context, papers_found, n_proposals)
 
     if _paper_store is not None:
         _paper_store.save_session(
@@ -605,9 +578,7 @@ async def search(req: SearchRequest, user: CurrentUser) -> dict[str, Any]:
             researcher_id=researcher_id,
             profile_snap={
                 "name": user.display_name,
-                "plant_species": req.plant_species,
-                "stress_types": req.stress_types,
-                "phenotyping_methods": req.phenotyping_methods,
+                "facets": current_domain().validate_facets(req.facets),
                 "expertise_keywords": req.expertise_keywords,
                 "source_targets": req.source_targets,
                 "time_range_months": req.time_range_months,
@@ -686,7 +657,7 @@ async def get_contradictions(user: CurrentUser) -> list[dict]:
         if key not in seen:
             seen.add(key)
             merged.append(c)
-    return merged
+    return _annotate_contradictions(merged)
 
 
 @app.get("/api/researcher/results")
@@ -757,17 +728,9 @@ async def status() -> dict[str, Any]:
     return await _call(_mining_handle.get_agent_status())
 
 
-def _facility_equipment() -> list[str]:
-    raw = os.environ.get("FACILITY_EQUIPMENT", "")
-    return [e.strip() for e in raw.split(",") if e.strip()]
-
-
 @app.get("/api/config")
 async def config() -> dict[str, Any]:
-    return {
-        "chainlit_url": os.environ.get("CHAINLIT_URL", "http://localhost:8001"),
-        "facility_equipment": _facility_equipment(),
-    }
+    return {"chainlit_url": os.environ.get("CHAINLIT_URL", "http://localhost:8001")}
 
 
 _dist = Path(__file__).parent / "frontend" / "dist"

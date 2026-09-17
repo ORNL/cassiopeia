@@ -39,6 +39,7 @@ PUBLIC_PATHS = {
     "/api/auth/token",
     "/api/auth/logout",
     "/api/config",
+    "/api/domain",  # domain-pack manifest: shared vocabulary, no per-user data
     "/api/status",
     "/api/rag/status",
 }

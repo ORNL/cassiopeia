@@ -4,9 +4,10 @@
 import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import PropTypes from "prop-types";
 import { apiFetch, postJson } from "./api.js";
+import { capitalize, selectableFacets, useDomain, valueLabel } from "./domain.jsx";
 
 // Decode HTML entities (e.g. &lt;i&gt; → <i>) then strip all tags to plain text.
-// Paper titles from Europe PMC often contain HTML markup for species names.
+// Paper titles from Europe PMC often contain HTML markup (e.g. italic names).
 function cleanTitle(raw) {
   if (!raw) return "";
   const ta = document.createElement("textarea");
@@ -15,49 +16,8 @@ function cleanTitle(raw) {
 }
 
 // ─────────────────────────────────────────────────
-// Data constants (APPL-specific)
+// Data constants
 // ─────────────────────────────────────────────────
-
-const PLANT_SPECIES = [
-  { value: "poplar", label: "Poplar", latin: "Populus spp." },
-  { value: "pennycress", label: "Pennycress", latin: "Thlaspi arvense" },
-  { value: "arabidopsis", label: "Arabidopsis", latin: "Arabidopsis thaliana" },
-  { value: "soybean", label: "Soybean", latin: "Glycine max" },
-  { value: "sorghum", label: "Sorghum", latin: "Sorghum bicolor" },
-  { value: "switchgrass", label: "Switchgrass", latin: "Panicum virgatum" },
-  { value: "miscanthus", label: "Miscanthus", latin: "Miscanthus × giganteus" },
-  { value: "brachypodium", label: "Brachypodium", latin: "Brachypodium distachyon" },
-];
-
-const STRESS_TYPES = [
-  { value: "drought", label: "Drought", icon: "💧" },
-  { value: "nutrient", label: "Nutrient", icon: "🧪" },
-  { value: "temperature", label: "Temperature", icon: "🌡️" },
-  { value: "pathogen", label: "Pathogen", icon: "🦠" },
-  { value: "heavy_metal", label: "Heavy Metal", icon: "⚗️" },
-  { value: "salinity", label: "Salinity", icon: "🧂" },
-  { value: "light", label: "Light", icon: "☀️" },
-  { value: "flooding", label: "Flooding", icon: "🌊" },
-];
-
-const PHENOTYPING_METHODS = [
-  { value: "hyperspectral_imaging", label: "Hyperspectral Imaging", icon: "🌈" },
-  { value: "rgb_imaging", label: "RGB Imaging", icon: "📷" },
-  { value: "thermal_imaging", label: "Thermal Imaging", icon: "🔥" },
-  { value: "chlorophyll_fluorescence", label: "Chlorophyll Fluorescence", icon: "🔬" },
-  { value: "root_imaging", label: "Root Imaging", icon: "🌱" },
-];
-
-const ARTICLE_SOURCES = [
-  { value: "biorxiv", label: "bioRxiv", type: "open", desc: "Preprints — daily scan, full text" },
-  { value: "plos_one", label: "PLoS ONE", type: "open", desc: "Open access — weekly scan" },
-  { value: "frontiers", label: "Frontiers", type: "open", desc: "Open access — RSS feeds" },
-  { value: "arxiv", label: "arXiv", type: "open", desc: "Preprints — computational methods" },
-  { value: "pubmed", label: "PubMed", type: "paywall", desc: "Abstracts & citation data" },
-  { value: "nature_communications", label: "Nature Comms", type: "paywall", desc: "High-impact — abstracts only" },
-  { value: "new_phytologist", label: "New Phytologist", type: "paywall", desc: "Plant science — abstracts" },
-  { value: "plant_physiology", label: "Plant Physiology", type: "paywall", desc: "Plant science — abstracts" },
-];
 
 const CREDIBILITY_ICONS = {
   high: "🟢", moderate: "🟡", preliminary: "🔴", conflicting: "⚠️",
@@ -67,20 +27,22 @@ const CREDIBILITY_ICONS = {
 // Components
 // ─────────────────────────────────────────────────
 
-function SpeciesSelect({ selected, onChange }) {
+function CardSelect({ label, options, selected, onChange }) {
   return (
     <div style={{ marginBottom: 20 }}>
-      <div style={S.label}>Plant Species</div>
-      <div style={S.speciesGrid}>
-        {PLANT_SPECIES.map((sp) => {
-          const on = selected.includes(sp.value);
+      <div style={S.label}>{label}</div>
+      <div style={S.cardGrid}>
+        {options.map((opt) => {
+          const on = selected.includes(opt.value);
           return (
-            <button key={sp.value}
-              onClick={() => onChange(on ? selected.filter((s) => s !== sp.value) : [...selected, sp.value])}
-              style={{ ...S.speciesCard, ...(on ? S.speciesOn : {}) }}
+            <button key={opt.value}
+              onClick={() => onChange(on ? selected.filter((s) => s !== opt.value) : [...selected, opt.value])}
+              style={{ ...S.optCard, ...(on ? S.optCardOn : {}) }}
             >
-              <span style={S.speciesName}>{sp.label}</span>
-              <span style={{ ...S.speciesLatin, ...(on ? { color: "#86efac" } : {}) }}>{sp.latin}</span>
+              <span style={S.optCardName}>{opt.label}</span>
+              {opt.detail && (
+                <span style={{ ...S.optCardDetail, ...(on ? { color: "#86efac" } : {}) }}>{opt.detail}</span>
+              )}
             </button>
           );
         })}
@@ -89,7 +51,25 @@ function SpeciesSelect({ selected, onChange }) {
   );
 }
 
-SpeciesSelect.propTypes = {
+CardSelect.propTypes = {
+  label: PropTypes.string.isRequired,
+  options: PropTypes.array.isRequired,
+  selected: PropTypes.arrayOf(PropTypes.string).isRequired,
+  onChange: PropTypes.func.isRequired,
+};
+
+function FacetSelect({ facet, selected, onChange }) {
+  if (facet.widget === "cards") {
+    return <CardSelect label={facet.label} options={facet.vocabulary} selected={selected} onChange={onChange} />;
+  }
+  return (
+    <ChipSelect label={facet.label} options={facet.vocabulary} selected={selected} onChange={onChange}
+      renderOption={(o) => (o.icon ? `${o.icon} ${o.label}` : o.label)} />
+  );
+}
+
+FacetSelect.propTypes = {
+  facet: PropTypes.object.isRequired,
   selected: PropTypes.arrayOf(PropTypes.string).isRequired,
   onChange: PropTypes.func.isRequired,
 };
@@ -162,8 +142,9 @@ SourceGroup.propTypes = {
 };
 
 function SourceSelector({ selected, onChange }) {
-  const open = ARTICLE_SOURCES.filter((s) => s.type === "open");
-  const paywall = ARTICLE_SOURCES.filter((s) => s.type === "paywall");
+  const { sources } = useDomain();
+  const open = sources.filter((s) => s.type === "open");
+  const paywall = sources.filter((s) => s.type === "paywall");
 
   const toggleAll = (group) => {
     const vals = group.map((s) => s.value);
@@ -192,6 +173,12 @@ SourceSelector.propTypes = {
 
 
 function PaperCard({ paper, expanded, onToggle, isNew }) {
+  const domain = useDomain();
+  const scoreRows = [
+    ...domain.facets.map((f) => [f.short_label, paper.scores.facets?.[f.key] ?? 0]),
+    ["Credibility", paper.scores.credibility],
+    ["Novelty", paper.scores.novelty],
+  ];
   const bw = (v) => `${Math.max(v * 100, 2)}%`;
   const bc = (v) => {
     if (v > 0.7) return "#4ade80";
@@ -236,10 +223,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
       {expanded && (
         <div style={S.pExp}>
           <div style={S.sGrid}>
-            {[["Species", paper.scores.species_match], ["Stress", paper.scores.stress_match],
-              ["Method", paper.scores.method_match], ["Credibility", paper.scores.credibility],
-              ["Novelty", paper.scores.novelty],
-            ].map(([l, v]) => (
+            {scoreRows.map(([l, v]) => (
               <div key={l} style={S.sRow}>
                 <span style={S.sLbl}>{l}</span>
                 <div style={S.sBarBg}><div style={{ ...S.sBar, width: bw(v), backgroundColor: bc(v) }} /></div>
@@ -249,7 +233,7 @@ function PaperCard({ paper, expanded, onToggle, isNew }) {
           </div>
           {paper.suggested_combinations.length > 0 && (
             <div style={S.cBox}>
-              <div style={S.cTitle}>💡 Experiment idea from this paper</div>
+              <div style={S.cTitle}>💡 {capitalize(domain.proposal_noun)} idea from this paper</div>
               {paper.suggested_combinations.map((c) => (
                 <div key={c} style={S.cLine}>{c}</div>
               ))}
@@ -274,52 +258,29 @@ PaperCard.propTypes = {
 };
 
 // ─────────────────────────────────────────────────
-// ProposalsTab / HypothesesTab — paginated tabs with species+stress filters
+// ProposalsTab / HypothesesTab — paginated tabs with facet filters
 // ─────────────────────────────────────────────────
 
-const FEASIBILITY_STYLE = {
-  true:      { color: "#4ade80", bg: "#0a1f12", border: "#1a4a2a", icon: "✓" },
-  partial:   { color: "#fbbf24", bg: "#1a1204", border: "#4a3a0a", icon: "~" },
-  false:     { color: "#f87171", bg: "#1a0808", border: "#4a1a1a", icon: "✗" },
-};
-
-const FEASIBILITY_LABEL = { true: "Feasible", partial: "Partially feasible", false: "Not feasible" };
-
-function FeasibilityBadge({ f }) {
-  if (f?.feasible == null) return null;
-  let key;
-  if (f.feasible === true) key = "true";
-  else if (f.feasible === false) key = "false";
-  else key = "partial";
-  const { color, bg, border, icon } = FEASIBILITY_STYLE[key];
-  const feasibilityLabel = FEASIBILITY_LABEL[key];
-  return (
-    <span title={f.note} style={{ fontSize: 10, fontWeight: 700, color, background: bg, border: `1px solid ${border}`, borderRadius: 10, padding: "2px 8px", whiteSpace: "nowrap", cursor: "help" }}>
-      {icon} {feasibilityLabel}
-      {f.confidence ? ` · ${(f.confidence * 100).toFixed(0)}%` : ""}
-    </span>
-  );
+// Results of the domain pack's proposal evaluators. Pack components (from
+// `@domain-ui`) render them; without one, a panel falls back to the note.
+function EvaluatorResults({ proposal, slot }) {
+  const domain = useDomain();
+  const components = domain.plugins[slot] || {};
+  return domain.evaluators.map(({ key }) => {
+    const result = proposal[key];
+    if (!result) return null;
+    const Component = components[key];
+    if (Component) return <Component key={key} result={result} />;
+    if (slot !== "proposalPanels" || !result.note) return null;
+    return (
+      <div key={key} style={{ marginTop: 8, background: "#0c0f1a", borderRadius: 6, padding: "8px 12px", fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>
+        {result.note}
+      </div>
+    );
+  });
 }
 
-function FeasibilityDetail({ f }) {
-  if (!f?.note) return null;
-  return (
-    <div style={{ marginTop: 8, background: "#0c0f1a", borderRadius: 6, padding: "8px 12px" }}>
-      <div style={{ fontSize: 12, color: "#64748b", lineHeight: 1.5 }}>{f.note}</div>
-      {f.missing_equipment?.length > 0 && (
-        <div style={{ marginTop: 4, display: "flex", gap: 6, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 10, color: "#f87171", fontWeight: 600 }}>Missing:</span>
-          {f.missing_equipment.map((e) => (
-            <span key={e} style={{ fontSize: 10, color: "#f87171", background: "#1a0808", border: "1px solid #4a1a1a", borderRadius: 6, padding: "1px 6px" }}>{e}</span>
-          ))}
-        </div>
-      )}
-      {f.adaptation && (
-        <div style={{ marginTop: 4, fontSize: 12, color: "#fbbf24", fontStyle: "italic" }}>Adaptation: {f.adaptation}</div>
-      )}
-    </div>
-  );
-}
+EvaluatorResults.propTypes = { proposal: PropTypes.object.isRequired, slot: PropTypes.string.isRequired };
 
 function verifyBorderColor(supported) {
   if (supported === true)  return "#1a4a2a";
@@ -423,6 +384,7 @@ function SeverityChip({ concern, severity }) {
 SeverityChip.propTypes = { concern: PropTypes.string.isRequired, severity: PropTypes.string.isRequired };
 
 function CritiquePanel({ critique }) {
+  const domain = useDomain();
   const [expanded, setExpanded] = useState(false);
   if (!critique) return null;
 
@@ -491,15 +453,15 @@ function CritiquePanel({ critique }) {
             </div>
           )}
 
-          {/* Feasibility concerns */}
-          {critique.feasibility_concerns?.length > 0 && (
-            <div style={S.critiqueSection}>
-              <div style={S.critiqueSectionTitle}>Practical concerns</div>
-              {critique.feasibility_concerns.map((item) => (
+          {/* Extra dimensions declared by the domain pack */}
+          {domain.critique_dimensions.map((d) => critique[d.key]?.length > 0 && (
+            <div key={d.key} style={S.critiqueSection}>
+              <div style={S.critiqueSectionTitle}>{d.label}</div>
+              {critique[d.key].map((item) => (
                 <SeverityChip key={item.concern} concern={item.concern} severity={item.severity} />
               ))}
             </div>
-          )}
+          ))}
         </div>
       )}
     </div>
@@ -515,7 +477,7 @@ function RagComboCard({ c, rating, onRate, paperById, isNew }) {
         {isNew && <span style={S.newBadge}>NEW</span>}
         {c.theme && <span style={S.themeChip}>{c.theme}</span>}
         {c.novelty_warning && <span style={S.noveltyWarn}>⚠ {c.novelty_warning}</span>}
-        {c.feasibility && <FeasibilityBadge f={c.feasibility} />}
+        <EvaluatorResults proposal={c} slot="proposalBadges" />
         <div style={{ marginLeft: "auto", display: "flex", gap: 4 }}>
           <button onClick={(e) => { e.stopPropagation(); onRate(c, 1); }}
             style={{ ...S.rateBtn, ...(rating === 1 ? S.rateBtnUp : {}) }} title="Useful">👍</button>
@@ -563,13 +525,10 @@ function RagComboCard({ c, rating, onRate, paperById, isNew }) {
       )}
       <VerificationPanel v={c.verification} />
       <CritiquePanel critique={c.critique} />
-      <FeasibilityDetail f={c.feasibility} />
+      <EvaluatorResults proposal={c} slot="proposalPanels" />
     </div>
   );
 }
-
-FeasibilityBadge.propTypes = { f: PropTypes.object };
-FeasibilityDetail.propTypes = { f: PropTypes.object };
 
 RagComboCard.propTypes = { c: PropTypes.object, rating: PropTypes.number, onRate: PropTypes.func, paperById: PropTypes.object, isNew: PropTypes.bool };
 
@@ -580,49 +539,48 @@ function buildCountLabel(filtered, total, category) {
   return filtered === total ? `${total}${suffix}` : `${filtered} / ${total}${suffix}`;
 }
 
-function filterCombos(items, speciesF, stressF) {
-  let out = items;
-  if (speciesF.length > 0) out = out.filter((c) => speciesF.some((s) => (c.matched_species  || []).includes(s)));
-  if (stressF.length  > 0) out = out.filter((c) => stressF.some( (s) => (c.matched_stresses || []).includes(s)));
-  return out;
+function filterByFacets(items, filters) {
+  return items.filter((c) => Object.entries(filters).every(
+    ([key, vals]) => vals.length === 0 || vals.some((v) => (c.matched?.[key] || []).includes(v)),
+  ));
 }
 
 function toggleTerm(arr, term) {
   return arr.includes(term) ? arr.filter((x) => x !== term) : [...arr, term];
 }
 
-function ComboFilterBar({ items, speciesF, setSpeciesF, stressF, setStressF, total, filtered, category }) {
-  const availSp = [...new Set(items.flatMap((c) => c.matched_species  || []))];
-  const availSt = [...new Set(items.flatMap((c) => c.matched_stresses || []))];
+function FacetFilterBars({ items, filters, setFilters }) {
+  const domain = useDomain();
+  return domain.facets.filter((f) => f.annotate).map((f) => {
+    const available = [...new Set(items.flatMap((c) => c.matched?.[f.key] || []))];
+    if (available.length === 0) return null;
+    const selected = filters[f.key] || [];
+    const set = (vals) => setFilters((prev) => ({ ...prev, [f.key]: vals }));
+    return (
+      <div key={f.key} style={{ ...S.fBar, marginBottom: 8 }}>
+        <span style={S.fFilterLabel}>{f.short_label}:</span>
+        <button onClick={() => set([])} style={{ ...S.fBtn, ...(selected.length === 0 ? S.fOn : {}) }}>All</button>
+        {available.map((v) => (
+          <button key={v} onClick={() => set(toggleTerm(selected, v))} style={{ ...S.fBtn, ...(selected.includes(v) ? S.fOn : {}) }}>
+            {valueLabel(f, v)}
+          </button>
+        ))}
+      </div>
+    );
+  });
+}
+
+FacetFilterBars.propTypes = { items: PropTypes.array, filters: PropTypes.object, setFilters: PropTypes.func };
+
+function ComboFilterBar({ items, filters, setFilters, total, filtered, category }) {
   const countLabel = buildCountLabel(filtered, total, category);
   return (<>
-    {availSp.length > 0 && (
-      <div style={{ ...S.fBar, marginBottom: 8 }}>
-        <span style={S.fFilterLabel}>Species:</span>
-        <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
-        {availSp.map((s) => (
-          <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
-            {s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-    )}
-    {availSt.length > 0 && (
-      <div style={{ ...S.fBar, marginBottom: 8 }}>
-        <span style={S.fFilterLabel}>Stress:</span>
-        <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
-        {availSt.map((s) => (
-          <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
-            {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
-          </button>
-        ))}
-      </div>
-    )}
+    <FacetFilterBars items={items} filters={filters} setFilters={setFilters} />
     <div style={{ textAlign: "right", fontSize: 12, color: "#64748b", marginBottom: 12 }}>{countLabel}</div>
   </>);
 }
 
-ComboFilterBar.propTypes = { items: PropTypes.array, speciesF: PropTypes.array, setSpeciesF: PropTypes.func, stressF: PropTypes.array, setStressF: PropTypes.func, total: PropTypes.number, filtered: PropTypes.number, category: PropTypes.string };
+ComboFilterBar.propTypes = { items: PropTypes.array, filters: PropTypes.object, setFilters: PropTypes.func, total: PropTypes.number, filtered: PropTypes.number, category: PropTypes.string };
 
 function ComboPagination({ page, setPage, pageCount, pageSize, setPageSize, pageSizes }) {
   const hasPaging  = pageCount > 1;
@@ -655,8 +613,8 @@ function ComboPagination({ page, setPage, pageCount, pageSize, setPageSize, page
 ComboPagination.propTypes = { page: PropTypes.number, setPage: PropTypes.func, pageCount: PropTypes.number, pageSize: PropTypes.number, setPageSize: PropTypes.func, pageSizes: PropTypes.array };
 
 function ProposalsTab({ ragCombos, newProposalIds, ratings, onRate, papers, synthesisPaperMeta }) {
-  const [speciesF, setSpeciesF]   = useState([]);
-  const [stressF,  setStressF]    = useState([]);
+  const domain = useDomain();
+  const [filters,  setFilters]    = useState({});
   const [pageSize, setPageSize]   = useState(10);
   const [page,     setPage]       = useState(0);
 
@@ -669,11 +627,11 @@ function ProposalsTab({ ragCombos, newProposalIds, ratings, onRate, papers, synt
   }, [papers, synthesisPaperMeta]);
 
   const filtered = useMemo(
-    () => filterCombos(ragCombos, speciesF, stressF),
-    [ragCombos, speciesF, stressF],
+    () => filterByFacets(ragCombos, filters),
+    [ragCombos, filters],
   );
 
-  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+  useEffect(() => { setPage(0); }, [filters, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safe      = Math.min(page, pageCount - 1);
@@ -694,8 +652,8 @@ function ProposalsTab({ ragCombos, newProposalIds, ratings, onRate, papers, synt
         <h3 style={S.cardH}>AI-Synthesized Proposals</h3>
         <span style={S.ragBadge}>RAG · cross-paper</span>
       </div>
-      <p style={S.cardSub}>Novel experiment designs reasoned over multiple papers together</p>
-      <ComboFilterBar items={ragCombos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={ragCombos.length} filtered={filtered.length} category="proposals" />
+      <p style={S.cardSub}>Novel {domain.proposal_noun} designs reasoned over multiple papers together</p>
+      <ComboFilterBar items={ragCombos} filters={filters} setFilters={setFilters} total={ragCombos.length} filtered={filtered.length} category="proposals" />
       {paged.map((c) => (
         <RagComboCard key={c.proposal_id || c.suggestion} c={c} rating={ratings[c.proposal_id]} onRate={onRate} paperById={paperById} isNew={(newProposalIds || new Set()).has(c.proposal_id || c.suggestion)} />
       ))}
@@ -707,17 +665,16 @@ function ProposalsTab({ ragCombos, newProposalIds, ratings, onRate, papers, synt
 ProposalsTab.propTypes = { ragCombos: PropTypes.array, newProposalIds: PropTypes.instanceOf(Set), ratings: PropTypes.object, onRate: PropTypes.func, papers: PropTypes.array, synthesisPaperMeta: PropTypes.object };
 
 function HypothesesTab({ combos }) {
-  const [speciesF, setSpeciesF]   = useState([]);
-  const [stressF,  setStressF]    = useState([]);
+  const [filters,  setFilters]    = useState({});
   const [pageSize, setPageSize]   = useState(20);
   const [page,     setPage]       = useState(0);
 
   const filtered = useMemo(
-    () => filterCombos(combos, speciesF, stressF),
-    [combos, speciesF, stressF],
+    () => filterByFacets(combos, filters),
+    [combos, filters],
   );
 
-  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+  useEffect(() => { setPage(0); }, [filters, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safe      = Math.min(page, pageCount - 1);
@@ -736,7 +693,7 @@ function HypothesesTab({ combos }) {
     <div style={S.card}>
       <h3 style={S.cardH}>Per-Paper Hypotheses</h3>
       <p style={S.cardSub}>One-sentence ideas generated per paper during scoring — quick signals, not cross-paper reasoning</p>
-      <ComboFilterBar items={combos} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={combos.length} filtered={filtered.length} category="hypotheses" />
+      <ComboFilterBar items={combos} filters={filters} setFilters={setFilters} total={combos.length} filtered={filtered.length} category="hypotheses" />
       {paged.map((c) => (
         <div key={c.source_doi || c.suggestion} style={S.comboCard}>
           <div style={{ fontSize: 14, color: "#e2e8f0", lineHeight: 1.5, marginBottom: 8 }}>{c.suggestion}</div>
@@ -763,17 +720,16 @@ function HypothesesTab({ combos }) {
 HypothesesTab.propTypes = { combos: PropTypes.array };
 
 function ContradictionsTab({ contradictions, newContradictionKeys }) {
-  const [speciesF, setSpeciesF] = useState([]);
-  const [stressF,  setStressF]  = useState([]);
+  const [filters,  setFilters]  = useState({});
   const [pageSize, setPageSize] = useState(10);
   const [page,     setPage]     = useState(0);
 
   const filtered = useMemo(
-    () => filterCombos(contradictions, speciesF, stressF),
-    [contradictions, speciesF, stressF],
+    () => filterByFacets(contradictions, filters),
+    [contradictions, filters],
   );
 
-  useEffect(() => { setPage(0); }, [speciesF, stressF, pageSize]);
+  useEffect(() => { setPage(0); }, [filters, pageSize]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safe      = Math.min(page, pageCount - 1);
@@ -795,7 +751,7 @@ function ContradictionsTab({ contradictions, newContradictionKeys }) {
         <span style={{ ...S.ragBadge, borderColor: "#7c3a1a", color: "#fb923c", background: "#1a0e06" }}>{contradictions.length} found</span>
       </div>
       <p style={S.cardSub}>Papers in your knowledge base that present conflicting or irreconcilable findings</p>
-      <ComboFilterBar items={contradictions} speciesF={speciesF} setSpeciesF={setSpeciesF} stressF={stressF} setStressF={setStressF} total={contradictions.length} filtered={filtered.length} category="contradictions" />
+      <ComboFilterBar items={contradictions} filters={filters} setFilters={setFilters} total={contradictions.length} filtered={filtered.length} category="contradictions" />
       {paged.map((c) => {
         const cKey = contKey(c);
         const isNew = (newContradictionKeys || new Set()).has(cKey);
@@ -837,9 +793,10 @@ function ContradictionsTab({ contradictions, newContradictionKeys }) {
 ContradictionsTab.propTypes = { contradictions: PropTypes.array, newContradictionKeys: PropTypes.instanceOf(Set) };
 
 function ResultsTab({ papers, newPaperIds, newSince }) {
+  const domain = useDomain();
+  const sortOptions = useMemo(() => buildSortOptions(domain), [domain]);
   const [credF, setCredF]             = useState("all");
-  const [speciesF, setSpeciesF]       = useState([]);
-  const [stressF, setStressF]         = useState([]);
+  const [filters, setFilters]         = useState({});
   const [sortKey, setSortKey]         = useState("overall");
   const [pageSize, setPageSize]       = useState(20);
   const [page, setPage]               = useState(0);
@@ -847,16 +804,11 @@ function ResultsTab({ papers, newPaperIds, newSince }) {
   const [expPaper, setExpPaper]       = useState(null);
 
   const filtered = useMemo(
-    () => filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey),
-    [papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey],
+    () => filterAndSortPapers(papers, credF, filters, showNewOnly, newPaperIds, sortKey),
+    [papers, credF, filters, showNewOnly, newPaperIds, sortKey],
   );
 
-  const { availableSpecies, availableStresses } = useMemo(() => ({
-    availableSpecies:  [...new Set(papers.flatMap((p) => p.matched_species  || []))],
-    availableStresses: [...new Set(papers.flatMap((p) => p.matched_stresses || []))],
-  }), [papers]);
-
-  useEffect(() => { setPage(0); }, [papers, credF, speciesF, stressF, sortKey, pageSize, showNewOnly]);
+  useEffect(() => { setPage(0); }, [papers, credF, filters, sortKey, pageSize, showNewOnly]);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage  = Math.min(page, pageCount - 1);
@@ -884,28 +836,7 @@ function ResultsTab({ papers, newPaperIds, newSince }) {
       </div>
       <p style={S.cardSub}>Scored and ranked against your research profile — combine filters and sort to explore</p>
 
-      {availableSpecies.length > 0 && (
-        <div style={{ ...S.fBar, marginBottom: 8 }}>
-          <span style={S.fFilterLabel}>Species:</span>
-          <button onClick={() => setSpeciesF([])} style={{ ...S.fBtn, ...(speciesF.length === 0 ? S.fOn : {}) }}>All</button>
-          {availableSpecies.map((s) => (
-            <button key={s} onClick={() => setSpeciesF(toggleTerm(speciesF, s))} style={{ ...S.fBtn, ...(speciesF.includes(s) ? S.fOn : {}) }}>
-              {s.charAt(0).toUpperCase() + s.slice(1)}
-            </button>
-          ))}
-        </div>
-      )}
-      {availableStresses.length > 0 && (
-        <div style={{ ...S.fBar, marginBottom: 8 }}>
-          <span style={S.fFilterLabel}>Stress:</span>
-          <button onClick={() => setStressF([])} style={{ ...S.fBtn, ...(stressF.length === 0 ? S.fOn : {}) }}>All</button>
-          {availableStresses.map((s) => (
-            <button key={s} onClick={() => setStressF(toggleTerm(stressF, s))} style={{ ...S.fBtn, ...(stressF.includes(s) ? S.fOn : {}) }}>
-              {s.charAt(0).toUpperCase() + s.slice(1).replace("_", " ")}
-            </button>
-          ))}
-        </div>
-      )}
+      <FacetFilterBars items={papers} filters={filters} setFilters={setFilters} />
       <div style={{ ...S.fBar, marginBottom: 0 }}>
         <span style={S.fFilterLabel}>Credibility:</span>
         {["all", "high", "moderate", "preliminary", "conflicting"].map((f) => (
@@ -928,7 +859,7 @@ function ResultsTab({ papers, newPaperIds, newSince }) {
       </div>
       <div style={{ ...S.fBar, borderTop: "1px solid #1e293b", paddingTop: 12, marginTop: 12, marginBottom: 16 }}>
         <span style={S.fFilterLabel}>Sort:</span>
-        {SORT_OPTIONS.map((o) => (
+        {sortOptions.map((o) => (
           <button key={o.key} onClick={() => setSortKey(o.key)} title={o.title} style={{ ...S.fBtn, ...(sortKey === o.key ? S.fOn : {}) }}>
             {o.label}
           </button>
@@ -955,6 +886,8 @@ ResultsTab.propTypes = {
 const SESSION_PAGE = 3;
 
 function SessionHistory({ sessions }) {
+  const domain = useDomain();
+  const chipFacets = selectableFacets(domain);
   const [offset, setOffset] = useState(0);
   const maxOffset = Math.max(0, sessions.length - SESSION_PAGE);
   const visible   = sessions.slice(offset, offset + SESSION_PAGE);
@@ -978,8 +911,9 @@ function SessionHistory({ sessions }) {
               <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
-              {(p.plant_species  || []).map((v) => <span key={v} style={S.sesChip}>{v}</span>)}
-              {(p.stress_types   || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipStress }}>{v}</span>)}
+              {chipFacets.map((f, i) => (p.facets?.[f.key] || []).map((v) => (
+                <span key={`${f.key}:${v}`} style={{ ...S.sesChip, ...(i > 0 ? S.sesChipAlt : {}) }}>{v}</span>
+              )))}
               {(p.source_targets || []).map((v) => <span key={v} style={{ ...S.sesChip, ...S.sesChipSrc }}>{v}</span>)}
               {rangeLabel && <span style={{ ...S.sesChip, ...S.sesChipRange }}>{rangeLabel}</span>}
             </div>
@@ -1008,6 +942,15 @@ SessionHistory.propTypes = { sessions: PropTypes.array };
 // Module-level helpers (excluded from Dashboard cognitive complexity)
 // ─────────────────────────────────────────────────
 
+/** Selected facet values, plus every visible value for "select all" facets. */
+function searchFacets(domain, selected) {
+  const out = {};
+  for (const f of domain.facets) {
+    out[f.key] = f.select_all ? f.vocabulary.map((v) => v.value) : (selected[f.key] || []);
+  }
+  return out;
+}
+
 async function fetchSearchResult(body) {
   const res = await postJson("/api/search", body);
   if (!res.ok) {
@@ -1035,20 +978,23 @@ const CRED_ORDER = { high: 4, moderate: 3, preliminary: 2, conflicting: 1 };
 /** Stable key for a contradiction — sorted paper titles joined so order doesn't matter. */
 const contKey = (c) => [...c.papers].sort((a, b) => a.localeCompare(b)).join("|");
 
-const SORT_OPTIONS = [
-  { key: "overall",           label: "Profile Score", title: "Weighted combination of relevance, novelty, method fit and credibility — weights set in Priority Settings" },
-  { key: "added_at",          label: "Fetched",       title: "How recently the paper was added to your library" },
-  { key: "novelty",           label: "Novelty",       title: "How novel the paper's approach is relative to your knowledge base" },
-  { key: "method_match",      label: "Method Fit",    title: "How well the paper's methods match your available instruments" },
-  { key: "credibility_level", label: "Credibility",   title: "Journal credibility and study design quality" },
-];
+function buildSortOptions(domain) {
+  return [
+    { key: "overall",  label: "Profile Score", title: "Weighted combination of relevance, novelty, methodology and credibility — weights set in Priority Settings" },
+    { key: "added_at", label: "Fetched",       title: "How recently the paper was added to your library" },
+    { key: "novelty",  label: "Novelty",       title: "How novel the paper's approach is relative to your knowledge base" },
+    ...domain.facets.filter((f) => f.sort_label).map((f) => (
+      { key: `facet:${f.key}`, label: f.sort_label, title: f.sort_title }
+    )),
+    { key: "credibility_level", label: "Credibility", title: "Journal credibility and study design quality" },
+  ];
+}
 
 const PAGE_SIZES = [10, 20, 50, 100];
 
-function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newPaperIds, sortKey) {
+function filterAndSortPapers(papers, credF, filters, showNewOnly, newPaperIds, sortKey) {
   let result = credF === "all" ? papers : papers.filter((p) => p.credibility_level === credF);
-  if (speciesF.length > 0) result = result.filter((p) => speciesF.some((s) => (p.matched_species  || []).includes(s)));
-  if (stressF.length  > 0) result = result.filter((p) => stressF.some( (s) => (p.matched_stresses || []).includes(s)));
+  result = filterByFacets(result, filters);
   if (showNewOnly) result = result.filter((p) => newPaperIds.has(p.paper_id));
   if (sortKey === "overall") return result;
   return [...result].sort((a, b) => {
@@ -1056,6 +1002,10 @@ function filterAndSortPapers(papers, credF, speciesF, stressF, showNewOnly, newP
       return (CRED_ORDER[b.credibility_level] ?? 0) - (CRED_ORDER[a.credibility_level] ?? 0);
     if (sortKey === "added_at")
       return (b.added_at || "").localeCompare(a.added_at || "");
+    if (sortKey.startsWith("facet:")) {
+      const key = sortKey.slice("facet:".length);
+      return (b.scores.facets?.[key] ?? 0) - (a.scores.facets?.[key] ?? 0);
+    }
     return (b.scores[sortKey] ?? 0) - (a.scores[sortKey] ?? 0);
   });
 }
@@ -1143,10 +1093,9 @@ function pollForContradictions(setContradictions) {
   }, 5000);
 }
 
-function applyStoredProfile(profile, setSpecies, setStresses, setSources, setTimeRange) {
+function applyStoredProfile(profile, setFacets, setSources, setTimeRange) {
   if (!profile) return;
-  if (profile.plant_species?.length)  setSpecies(profile.plant_species);
-  if (profile.stress_types?.length)   setStresses(profile.stress_types);
+  if (profile.facets)                 setFacets(profile.facets);
   if (profile.source_targets?.length) setSources(profile.source_targets);
   if (profile.time_range_months)      setTimeRange(profile.time_range_months);
 }
@@ -1168,10 +1117,10 @@ function startAgentPolling(setter) {
   return setInterval(poll, 10_000);
 }
 
-async function loadAndApplyProfile(setSpecies, setStresses, setSources, setTimeRange) {
+async function loadAndApplyProfile(setFacets, setSources, setTimeRange) {
   try {
     const r = await apiFetch("/api/researcher");
-    if (r.ok) applyStoredProfile(await r.json(), setSpecies, setStresses, setSources, setTimeRange);
+    if (r.ok) applyStoredProfile(await r.json(), setFacets, setSources, setTimeRange);
   } catch { /* silent */ }
 }
 
@@ -1205,14 +1154,19 @@ async function loadNewPapers(setNewPaperIds, setNewSince) {
 // Progress modal (polls scan stage every 600 ms)
 // ─────────────────────────────────────────────────
 
-const PROGRESS_STAGES = [
+const BASE_PROGRESS_STAGES = [
   { key: "registering",  label: "Registering profile" },
   { key: "searching",    label: "Querying sources & scoring papers" },
   { key: "fetching",     label: "Selecting top results" },
   { key: "indexing",     label: "Building knowledge base" },
   { key: "synthesizing", label: "Synthesising proposals" },
-  { key: "feasibility",  label: "Feasibility analysis" },
 ];
+
+function progressStages(domain) {
+  if (domain.evaluators.length === 0) return BASE_PROGRESS_STAGES;
+  const label = domain.evaluators.map((e) => e.label.replace(/…$/, "")).join(" · ");
+  return [...BASE_PROGRESS_STAGES, { key: "evaluating", label }];
+}
 
 const PS = {
   overlay:  { position: "fixed", inset: 0, background: "rgba(0,0,0,0.72)", zIndex: 200, display: "flex", alignItems: "center", justifyContent: "center" },
@@ -1223,8 +1177,8 @@ const PS = {
   errBox:   { background: "#1f0f0f", border: "1px solid #7f1d1d", borderRadius: 8, padding: "10px 14px", color: "#fca5a5", fontSize: 12, marginTop: 12 },
 };
 
-function stageIcon(stageKey, currentStage, isDone) {
-  const keys = PROGRESS_STAGES.map((s) => s.key);
+function stageIcon(stages, stageKey, currentStage, isDone) {
+  const keys = stages.map((s) => s.key);
   const thisIdx = keys.indexOf(stageKey);
   const curIdx  = keys.indexOf(currentStage);
   if (isDone || thisIdx < curIdx) return { icon: "✓", color: "#4ade80" };
@@ -1233,6 +1187,7 @@ function stageIcon(stageKey, currentStage, isDone) {
 }
 
 function ProgressModal({ searching, onDismiss }) {
+  const stages = progressStages(useDomain());
   const [progress, setProgress] = useState(null);
 
   // isDone: backend confirmed done, OR parent knows the scan finished (fallback for blocked polls)
@@ -1271,8 +1226,8 @@ function ProgressModal({ searching, onDismiss }) {
         </div>
         <div style={PS.bar}><div style={{ ...PS.fill, width: `${pct}%` }} /></div>
         <div style={{ fontSize: 12, color: "#4ade80", fontWeight: 700, textAlign: "right", marginBottom: 18 }}>{pct}%</div>
-        {PROGRESS_STAGES.map((s) => {
-          const { icon, color } = stageIcon(s.key, stage, isDone);
+        {stages.map((s) => {
+          const { icon, color } = stageIcon(stages, s.key, stage, isDone);
           return (
             <div key={s.key} style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
               <span style={{ fontSize: 13, minWidth: 20, color }}>{icon}</span>
@@ -1302,9 +1257,12 @@ ProgressModal.propTypes = {
 // ─────────────────────────────────────────────────
 
 export default function Dashboard({ onBack, researcherName, priorities, scanSettings, onOpenSettings, onOpenLLMSettings }) {
-  const [species, setSpecies] = useState([]);
-  const [stresses, setStresses] = useState([]);
-  const methods = PHENOTYPING_METHODS.map((m) => m.value);
+  const domain = useDomain();
+  const ui = domain.ui;
+  const [facets, setFacets] = useState({});
+  const setFacet = (key) => (values) => setFacets((prev) => ({ ...prev, [key]: values }));
+  const profileFacets = selectableFacets(domain);
+  const hasQueryTerms = profileFacets.some((f) => f.role !== "technique" && facets[f.key]?.length > 0);
   const [researchPrompt, setResearchPrompt] = useState("");
   const [sources, setSources] = useState([]);
   const [timeRange, setTimeRange] = useState(12);
@@ -1351,7 +1309,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
 
   // Restore profile, last results, contradictions, and new-paper markers on mount
   useEffect(() => {
-    loadAndApplyProfile(setSpecies, setStresses, setSources, setTimeRange);
+    loadAndApplyProfile(setFacets, setSources, setTimeRange);
     loadRestoredResults(setPapers, setSynthesisPaperMeta, setCombos, setRagCombos);
     loadRestoredContradictions(setContradictions);
     loadNewPapers(setNewPaperIds, setNewSince);
@@ -1390,9 +1348,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
     prevProposalIdsRef.current = new Set(ragCombos.map((c) => c.proposal_id || c.suggestion));
     try {
       const data = await fetchSearchResult({
-        plant_species: species,
-        stress_types: stresses,
-        phenotyping_methods: methods,
+        facets: searchFacets(domain, facets),
         expertise_keywords: extractedKeywords,
         priority_novelty: priorities.novelty,
         priority_relevance: priorities.relevance,
@@ -1434,7 +1390,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
     } finally {
       setSearching(false);
     }
-  }, [researcherName, species, stresses, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions, papers, ragCombos, applyContradictions]);
+  }, [researcherName, domain, facets, researchPrompt, extractedKeywords, priorities, timeRange, sources, scanSettings, refreshSessions, papers, ragCombos, applyContradictions]);
 
   const isAgentReady = agentStatus?.status === "running";
 
@@ -1471,8 +1427,8 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
               >←</button>
             )}
             <div>
-              <h1 style={S.h1}>CASSIOPEIA</h1>
-              <p style={S.sub}>Context-Aware Semantic Search for Inspiring Original Plant Experiments and Investigations at APPL</p>
+              <h1 style={S.h1}>{ui.app_name || "CASSIOPEIA"}</h1>
+              <p style={S.sub}>{ui.subtitle || domain.title}</p>
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
@@ -1516,8 +1472,9 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
               <h3 style={S.cardH}>Research Focus</h3>
               <div style={S.grid2}>
                 <div>
-                  <SpeciesSelect selected={species} onChange={setSpecies} />
-                  <ChipSelect label="Stress Types" options={STRESS_TYPES} selected={stresses} onChange={setStresses} renderOption={(o) => `${o.icon} ${o.label}`} />
+                  {profileFacets.map((f) => (
+                    <FacetSelect key={f.key} facet={f} selected={facets[f.key] || []} onChange={setFacet(f.key)} />
+                  ))}
                 </div>
                 <div>
                   <p style={{ ...S.cardSub, marginTop: 0 }}>Describe your research focus in natural language. Keywords are extracted by the LLM when you finish typing and used to refine both scoring and queries.</p>
@@ -1526,7 +1483,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
                       onChange={(e) => { setResearchPrompt(e.target.value); setExtractedKeywords([]); }}
                       onBlur={doExtractKeywords}
                       style={S.textarea} rows={8}
-                      placeholder="e.g. I want to explore how drought-induced changes in poplar root architecture relate to above-ground spectral signatures..."
+                      placeholder={ui.research_placeholder || "Describe the questions you are working on..."}
                     />
                     <span style={S.charCt}>{researchPrompt.length} chars</span>
                   </div>
@@ -1567,8 +1524,8 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
               <div style={S.errBox}>{searchError}</div>
             )}
 
-            <button onClick={doSearch} disabled={searching || !isAgentReady || (!species.length && !stresses.length)}
-              style={{ ...S.goBtn, ...((searching || !isAgentReady || (!species.length && !stresses.length)) ? S.goDis : {}) }}
+            <button onClick={doSearch} disabled={searching || !isAgentReady || !hasQueryTerms}
+              style={{ ...S.goBtn, ...((searching || !isAgentReady || !hasQueryTerms) ? S.goDis : {}) }}
             >
               {searchBtnLabel}
             </button>
@@ -1583,7 +1540,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
                   onChange={(e) => setAnchorInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && doAnchorSearch()}
                   style={{ ...S.input, flex: 1 }}
-                  placeholder="10.1093/jxb/erx456  or  Poplar root architecture under drought"
+                  placeholder={ui.anchor_placeholder || "DOI  or  title fragment"}
                 />
                 <button onClick={doAnchorSearch} disabled={anchorLoading || !anchorInput.trim()} style={{ ...S.goBtn, width: "auto", padding: "10px 20px", fontSize: 13 }}>
                   {anchorLoading ? "⏳" : "Find Similar"}
@@ -1635,7 +1592,7 @@ export default function Dashboard({ onBack, researcherName, priorities, scanSett
         )}
       </main>
 
-      <footer style={S.footer}>OPAL · CASSIOPEIA v0.1</footer>
+      <footer style={S.footer}>OPAL · {ui.app_name || "CASSIOPEIA"} v0.1</footer>
       {showProgress && (
         <ProgressModal
           searching={searching}
@@ -1673,11 +1630,11 @@ const S = {
   label: { display: "block", fontSize: 11, fontWeight: 700, color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 },
   input: { width: "100%", padding: "10px 14px", background: "#1e293b", border: "1px solid #334155", borderRadius: 8, color: "#e2e8f0", fontSize: 14, outline: "none", boxSizing: "border-box" },
 
-  speciesGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 },
-  speciesCard: { padding: "10px 6px", borderRadius: 8, border: "1px solid #1e293b", background: "#0c0f1a", cursor: "pointer", textAlign: "center", transition: "all 0.15s", display: "flex", flexDirection: "column", gap: 2 },
-  speciesOn: { background: "#164e3f", borderColor: "#4ade80" },
-  speciesName: { fontSize: 12, fontWeight: 600, color: "#e2e8f0" },
-  speciesLatin: { fontSize: 11, color: "#4b5563", fontStyle: "italic" },
+  cardGrid: { display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 },
+  optCard: { padding: "10px 6px", borderRadius: 8, border: "1px solid #1e293b", background: "#0c0f1a", cursor: "pointer", textAlign: "center", transition: "all 0.15s", display: "flex", flexDirection: "column", gap: 2 },
+  optCardOn: { background: "#164e3f", borderColor: "#4ade80" },
+  optCardName: { fontSize: 12, fontWeight: 600, color: "#e2e8f0" },
+  optCardDetail: { fontSize: 11, color: "#4b5563", fontStyle: "italic" },
 
   chipWrap: { display: "flex", flexWrap: "wrap", gap: 6 },
   chip: { padding: "7px 14px", borderRadius: 20, border: "1px solid #334155", background: "#1e293b", color: "#94a3b8", fontSize: 12, cursor: "pointer", transition: "all 0.15s", whiteSpace: "nowrap" },
@@ -1778,7 +1735,7 @@ const S = {
   sessionDate: { fontSize: 12, color: "#64748b", fontVariantNumeric: "tabular-nums", minWidth: 130 },
   sessionMeta: { fontSize: 12, color: "#94a3b8", fontWeight: 600 },
   sesChip: { fontSize: 10, padding: "2px 7px", borderRadius: 8, border: "1px solid #2d3f55", background: "#0f2033", color: "#7dd3fc" },
-  sesChipStress: { borderColor: "#3d2d1a", background: "#1a1008", color: "#fdba74" },
+  sesChipAlt: { borderColor: "#3d2d1a", background: "#1a1008", color: "#fdba74" },
   sesChipSrc: { borderColor: "#1e3a2a", background: "#0a1a12", color: "#6ee7b7" },
   sesChipRange: { borderColor: "#2d2060", background: "#0f0b2a", color: "#a78bfa" },
 

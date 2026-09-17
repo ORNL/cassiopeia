@@ -3,9 +3,9 @@
 
 """LiteLLM-backed proposal critic.
 
-Evaluates a proposed plant phenotyping experiment from a skeptical reviewer
-perspective, checking novelty, confounds, evidence strength, feasibility, and
-providing an overall recommendation.
+Evaluates a synthesized proposal from a skeptical reviewer perspective,
+checking novelty, confounds, evidence strength and any extra dimensions the
+domain pack declares, and providing an overall recommendation.
 
 Uses LLM_CHAT_MODEL since critique is a substantive reasoning task that
 benefits from a stronger model than verification.
@@ -21,16 +21,17 @@ import logging
 
 import litellm
 
+from domains import DomainPack, current_domain
 from utils.json_utils import parse_json_response
 
 logger = logging.getLogger(__name__)
 
 _CRITIC_PROMPT = """\
-You are a skeptical reviewer evaluating a proposed plant phenotyping experiment.
+You are a skeptical reviewer evaluating a proposed {subject}.
 Be specific and concrete. Avoid generic concerns. If a dimension has no
 substantive concern, say so explicitly rather than inventing one.
 
-Proposed experiment:
+Proposal:
 Theme: {theme}
 Suggestion: {suggestion}
 Rationale: {rationale}
@@ -42,10 +43,7 @@ Verification of insights against source papers:
 
 Most semantically similar papers in the knowledge base (for novelty check):
 {similar_papers_bullets}
-
-Available instruments at the facility:
-{instruments_list}
-
+{context_block}
 Reply with strict JSON only, no preamble, no code fences:
 {{
   "novelty": {{
@@ -60,10 +58,7 @@ Reply with strict JSON only, no preamble, no code fences:
     "assessment": "well_supported",
     "reasoning": "<one to three sentences>"
   }},
-  "feasibility_concerns": [
-    {{"concern": "<specific concern>", "severity": "low"}}
-  ],
-  "overall_recommendation": "pursue",
+{extra_dimensions}  "overall_recommendation": "pursue",
   "summary": "<one sentence summarizing the critique>"
 }}
 
@@ -72,7 +67,7 @@ evidence_strength.assessment in {{well_supported, partial, overreaching}},
 severity in {{low, medium, high}},
 overall_recommendation in {{pursue, refine, deprioritize}}.
 If a list dimension has no concerns, return an empty list.
-"""
+{dimension_notes}"""
 
 _MAX_RETRIES = 2
 
@@ -128,13 +123,44 @@ def _format_similar_papers(similar_papers: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _esc(text: str) -> str:
+    return text.replace("{", "{{").replace("}", "}}")
+
+
+def build_critic_prompt(
+    proposal: dict,
+    similar_papers: list[dict],
+    context: dict[str, list[str]],
+    domain: DomainPack,
+) -> str:
+    context_block = domain.render_context_block(context)
+    dims = domain.critique_dimensions
+    template = _CRITIC_PROMPT.replace("{extra_dimensions}", "".join(
+        f'  "{d.key}": [\n    {{{{"concern": "<specific concern>", "severity": "low"}}}}\n  ],\n'
+        for d in dims
+    )).replace("{dimension_notes}", "".join(
+        f"{d.key}: {_esc(d.description)}.\n" for d in dims if d.description
+    ))
+    return template.format(
+        subject=domain.prompts.critique_subject,
+        theme=proposal.get("theme", ""),
+        suggestion=proposal.get("suggestion", ""),
+        rationale=proposal.get("rationale", ""),
+        key_insights_bullets=_format_key_insights(proposal.get("key_insights", [])),
+        verification_bullets=_format_verification(proposal.get("verification")),
+        similar_papers_bullets=_format_similar_papers(similar_papers),
+        context_block=f"\n{context_block}\n" if context_block else "",
+    )
+
+
 async def critique_proposal(
     proposal: dict,
     similar_papers: list[dict],
-    instruments: list[str],
     llm_kwargs: dict,
+    context: dict[str, list[str]] | None = None,
+    domain: DomainPack | None = None,
 ) -> dict | None:
-    """Critique a single experiment proposal.
+    """Critique a single synthesized proposal.
 
     Makes one LLM call per proposal; returns a critique dict on success or
     None on persistent failure. Augmentation D depends on Augmentation A
@@ -144,33 +170,16 @@ async def critique_proposal(
     Args:
         proposal: Proposal dict as returned by synthesize_combinations (v2+).
         similar_papers: Semantically similar paper dicts for novelty assessment.
-        instruments: Available facility instruments.
         llm_kwargs: LiteLLM kwargs dict from LLMConfig.for_reasoning().
+        context: Profile context, rendered as the domain pack declares it.
+        domain: Pack supplying wording and extra dimensions (default: active pack).
 
     Returns:
         Critique dict or None on persistent failure.
     """
-    theme = proposal.get("theme", "")
-    suggestion = proposal.get("suggestion", "")
-    rationale = proposal.get("rationale", "")
-    key_insights = proposal.get("key_insights", [])
-    verification = proposal.get("verification", None)
-
-    instruments_list = (
-        "\n".join(f"  - {inst}" for inst in instruments)
-        if instruments
-        else "  (none specified)"
-    )
-
-    prompt = _CRITIC_PROMPT.format(
-        theme=theme,
-        suggestion=suggestion,
-        rationale=rationale,
-        key_insights_bullets=_format_key_insights(key_insights),
-        verification_bullets=_format_verification(verification),
-        similar_papers_bullets=_format_similar_papers(similar_papers),
-        instruments_list=instruments_list,
-    )
+    domain = domain or current_domain()
+    prompt = build_critic_prompt(proposal, similar_papers, context or {}, domain)
+    list_dims = ["confounds"] + [d.key for d in domain.critique_dimensions]
 
     last_exc: Exception | None = None
     for attempt in range(_MAX_RETRIES + 1):
@@ -189,8 +198,8 @@ async def critique_proposal(
             for key in ("novelty", "evidence_strength", "overall_recommendation", "summary"):
                 if key not in data:
                     raise KeyError(f"Missing required key: {key!r}")
-            data.setdefault("confounds", [])
-            data.setdefault("feasibility_concerns", [])
+            for key in list_dims:
+                data.setdefault(key, [])
             return data
         except (json.JSONDecodeError, KeyError) as exc:
             last_exc = exc

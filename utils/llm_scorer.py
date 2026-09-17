@@ -3,9 +3,9 @@
 
 """LiteLLM-backed paper scorer.
 
-Replaces keyword matching with LLM reading comprehension for the three
-text-dependent scoring dimensions (species_match, stress_match, method_match)
-and generates concrete experimental hypotheses.
+Replaces keyword matching with LLM reading comprehension for the per-facet
+scoring dimensions declared by the domain pack, and generates a concrete
+one-sentence hypothesis per paper.
 
 Falls back to the keyword-based PaperScorer when:
   - LLM_SCORING_ENABLED=false
@@ -34,13 +34,12 @@ from difflib import SequenceMatcher
 
 import litellm
 
+from domains import DomainPack, current_domain, term_text
 from models.schemas import (
-    CredibilityLevel,
     PaperMetadata,
     RelevanceScore,
     ResearcherProfile,
     ScoredPaper,
-    SourceType,
 )
 from utils.paper_scorer import PaperScorer
 from utils.json_utils import parse_json_response
@@ -54,34 +53,62 @@ litellm.set_verbose = False
 litellm.drop_params = True
 
 _SCORE_PROMPT = """\
-You are a scientific paper relevance evaluator for a plant biology researcher.
+You are a scientific paper relevance evaluator for a {field} researcher.
 
 Researcher profile:
-  Species of interest  : {species}
-  Stress types         : {stresses}
-  Phenotyping methods  : {methods}
-  Expertise keywords   : {keywords}
-  Available instruments: {equipment}
+{profile_lines}
 
 Paper to evaluate:
-  Title    : {title}
-  Abstract : {abstract}
-
-Score "method_match" based on how well the paper's experimental methods can be \
-reproduced or extended using the researcher's available instruments. A paper \
-requiring equipment the researcher does not have should score lower.
-
+  Title    : {{title}}
+  Abstract : {{abstract}}
+{guidance}
 CRITICAL OUTPUT RULE: your entire response must be exactly one valid JSON object. \
 No markdown fences, no prose, no keys other than those listed below. \
 Any deviation makes the response unusable.
-{{
-  "species_match"  : <float 0-1, how well this paper's organisms match the researcher's species>,
-  "stress_match"   : <float 0-1, how well the paper's stresses match>,
-  "method_match"   : <float 0-1, how well the paper's methods match the available instruments>,
-  "hypothesis"     : "<one concrete sentence describing an experiment that combines
+{{{{
+  "scores": {{{{
+{score_lines}
+  }}}},
+  "hypothesis"     : "<one concrete sentence describing {article} {noun} that combines
                        insights from this paper with the researcher's work, or empty string>"
-}}
+}}}}
 """
+
+
+def _profile_lines(domain: DomainPack, profile: ResearcherProfile) -> str:
+    rows = [
+        (f.label, ", ".join(term_text(v) for v in profile.terms(f.key)) or "any")
+        for f in domain.facets
+    ]
+    rows.append(("Expertise keywords", ", ".join(profile.expertise_keywords) or "none"))
+    rows.extend(domain.context_lines(profile.context))
+    width = max(len(label) for label, _ in rows)
+    return "\n".join(f"  {label:<{width}} : {value}" for label, value in rows)
+
+
+def _facet_description(facet) -> str:
+    return facet.description or f"how well the paper matches the researcher's {facet.label.lower()}"
+
+
+def _esc(text: str) -> str:
+    """Protect pack/profile text from the second ``str.format`` pass."""
+    return text.replace("{", "{{").replace("}", "}}")
+
+
+def build_score_prompt(domain: DomainPack, profile: ResearcherProfile, paper: PaperMetadata) -> str:
+    noun = domain.prompts.proposal_noun
+    guidance = domain.prompts.scoring_guidance
+    template = _SCORE_PROMPT.format(
+        field=_esc(domain.prompts.field),
+        profile_lines=_esc(_profile_lines(domain, profile)),
+        guidance=f"\n{_esc(guidance)}\n" if guidance else "",
+        score_lines=_esc(",\n".join(
+            f'    "{f.key}": <float 0-1, {_facet_description(f)}>' for f in domain.facets
+        )),
+        article="an" if noun[:1].lower() in "aeiou" else "a",
+        noun=_esc(noun),
+    )
+    return template.format(title=paper.title, abstract=paper.abstract[:6000])
 
 
 class LLMPaperScorer:
@@ -91,18 +118,23 @@ class LLMPaperScorer:
     identical except that score_paper is a coroutine.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, domain: DomainPack | None = None) -> None:
         self._enabled = (
             os.environ.get("LLM_SCORING_ENABLED", "true").lower() == "true"
         )
-        self._fallback = PaperScorer()
-        # Cache: paper_id → {"species_match", "stress_match", "method_match", "hypothesis"}
-        self._cache: dict[str, dict[str, float | str]] = {}
+        self._domain = domain
+        self._fallback = PaperScorer(domain)
+        # Cache: paper_id → {"facet_scores": {facet: float}, "hypothesis": str}
+        self._cache: dict[str, dict] = {}
 
         if self._enabled:
             logger.info("LLM scoring enabled")
         else:
             logger.info("LLM scoring disabled — using keyword fallback")
+
+    @property
+    def domain(self) -> DomainPack:
+        return self._domain or current_domain()
 
     async def score_paper(
         self,
@@ -122,14 +154,12 @@ class LLMPaperScorer:
         novelty = self._score_novelty(paper, existing_papers or [])
 
         relevance = RelevanceScore(
-            species_match=llm_dims["species_match"],
-            stress_match=llm_dims["stress_match"],
-            method_match=llm_dims["method_match"],
+            facet_scores=dict(llm_dims["facet_scores"]),
             recency=recency,
             credibility=credibility,
             novelty=novelty,
         )
-        relevance.overall = relevance.weighted_score(profile)
+        relevance.overall = self._fallback.overall(relevance, profile)
 
         hypothesis = llm_dims.get("hypothesis", "")
         return ScoredPaper(
@@ -157,28 +187,17 @@ class LLMPaperScorer:
         paper: PaperMetadata,
         profile: ResearcherProfile,
         llm_kwargs: dict,
-    ) -> dict[str, float | str]:
+    ) -> dict:
         """Return cached LLM scores or invoke the model."""
         if paper.paper_id in self._cache:
             return self._cache[paper.paper_id]
 
-        prompt = _SCORE_PROMPT.format(
-            species=", ".join(profile.plant_species) or "any",
-            stresses=", ".join(s.value.replace("_", " ") for s in profile.stress_types) or "any",
-            methods=", ".join(m.value.replace("_", " ") for m in profile.phenotyping_methods) or "any",
-            keywords=", ".join(profile.expertise_keywords) or "none",
-            equipment=", ".join(profile.available_equipment) or "standard laboratory equipment",
-            title=paper.title,
-            abstract=paper.abstract[:6000],
-        )
-
+        prompt = build_score_prompt(self.domain, profile, paper)
         result = await self._score_with_retry(prompt, paper.title, llm_kwargs)
         if result is None:
             fb = self._fallback.score_paper(paper, profile)
             result = {
-                "species_match": fb.relevance.species_match,
-                "stress_match": fb.relevance.stress_match,
-                "method_match": fb.relevance.method_match,
+                "facet_scores": fb.relevance.facet_scores,
                 "hypothesis": next(iter(fb.suggested_combinations), ""),
             }
 
@@ -187,7 +206,7 @@ class LLMPaperScorer:
 
     async def _score_with_retry(
         self, prompt: str, title: str, llm_kwargs: dict
-    ) -> dict[str, float | str] | None:
+    ) -> dict | None:
         """Attempt LLM scoring up to 4 times with backoff; return None on terminal failure."""
         _delays = [2, 8, 30]
         for attempt, delay in enumerate([0] + _delays):
@@ -205,7 +224,7 @@ class LLMPaperScorer:
                     logger.warning("LLM scoring rate-limited for '%s' — keyword fallback", title[:60])
                     return None
             except litellm.ContentPolicyViolationError:
-                # Azure's filter triggers on innocent plant biology text; fall back silently.
+                # Azure's filter can trigger on innocent scientific text; fall back silently.
                 logger.debug("Content policy blocked scoring for '%s' — keyword fallback", title[:60])
                 return None
             except Exception as exc:
@@ -215,7 +234,7 @@ class LLMPaperScorer:
                 return None
         return None
 
-    async def _one_llm_call(self, prompt: str, llm_kwargs: dict) -> dict[str, float | str]:
+    async def _one_llm_call(self, prompt: str, llm_kwargs: dict) -> dict:
         """Make a single LLM call and parse the JSON result."""
         response = await litellm.acompletion(
             **llm_kwargs,
@@ -227,10 +246,11 @@ class LLMPaperScorer:
         )
         raw = response.choices[0].message.content.strip()
         data = parse_json_response(raw)
+        scores = data.get("scores") or {}
         return {
-            "species_match": float(data.get("species_match", 0.5)),
-            "stress_match": float(data.get("stress_match", 0.5)),
-            "method_match": float(data.get("method_match", 0.5)),
+            "facet_scores": {
+                f.key: float(scores.get(f.key, 0.5)) for f in self.domain.facets
+            },
             "hypothesis": str(data.get("hypothesis", "")),
         }
 

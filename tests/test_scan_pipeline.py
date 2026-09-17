@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from models.schemas import PaperMetadata, SearchQuery, SourceType
+from models.schemas import PaperMetadata, SearchQuery
 
 
 # ---------------------------------------------------------------------------
@@ -24,9 +24,9 @@ def _make_agent():
     return agent
 
 
-def _query(source: SourceType = SourceType.PUBMED) -> SearchQuery:
+def _query(source: str = "flagship") -> SearchQuery:
     return SearchQuery(
-        query_string="poplar drought",
+        query_string="graphite capacity",
         source_target=source,
         researcher_id="r1",
     )
@@ -38,7 +38,7 @@ def _paper(paper_id: str, doi: str | None = None) -> PaperMetadata:
         title=f"Paper {paper_id}",
         authors=[],
         abstract="Some abstract.",
-        source=SourceType.PUBMED,
+        source="flagship",
         doi=doi,
     )
 

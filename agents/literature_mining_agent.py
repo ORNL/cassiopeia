@@ -1,7 +1,7 @@
 # Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
 # SPDX-License-Identifier: Apache-2.0
 
-"""APPL Literature Mining & Hypothesis Generation Agent.
+"""Literature Mining & Hypothesis Generation Agent.
 
 An Academy-compatible agent that:
 1. Accepts researcher profiles (via @action)
@@ -24,6 +24,7 @@ from typing import Any
 
 from academy.agent import Agent, action, loop
 
+from domains import current_domain
 from models.schemas import (
     AgentState,
     CredibilityLevel,
@@ -31,21 +32,18 @@ from models.schemas import (
     ResearcherProfile,
     ScoredPaper,
     SearchQuery,
-    SourceType,
-    StressType,
-    PhenotypingMethod,
 )
 from utils.llm_scorer import LLMPaperScorer
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
-from utils.source_fetchers import get_fetcher, FETCHER_REGISTRY
+from utils.source_fetchers import get_fetcher, source_registry
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
 
 class LiteratureMiningAgent(Agent):
-    """Stateful Academy agent for APPL literature mining.
+    """Stateful Academy agent for literature mining.
 
     State:
     - Researcher profiles with their priorities
@@ -100,43 +98,33 @@ class LiteratureMiningAgent(Agent):
         self,
         researcher_id: str,
         name: str,
-        plant_species: list[str] | None = None,
-        stress_types: list[str] | None = None,
-        phenotyping_methods: list[str] | None = None,
+        facets: dict[str, list[str]] | None = None,
         expertise_keywords: list[str] | None = None,
         priority_novelty: float = 0.5,
         priority_relevance: float = 0.5,
         priority_methodology: float = 0.5,
         priority_reproducibility: float = 0.5,
-        available_equipment: list[str] | None = None,
+        context: dict[str, list[str]] | None = None,
         time_range_months: int = 12,
         source_targets: list[str] | None = None,
     ) -> dict[str, Any]:
         """Register or update a researcher profile.
 
         Called by the dashboard when a researcher submits their preferences.
-        Returns the generated query count for confirmation.
+        ``facets`` is keyed by the domain pack's facet keys; unknown facets and
+        values outside a closed vocabulary are dropped.  Returns the generated
+        query count for confirmation.
         """
         profile = ResearcherProfile(
             researcher_id=researcher_id,
             name=name,
-            plant_species=plant_species or [],
-            stress_types=[
-                StressType(s) for s in (stress_types or [])
-                if s in StressType.__members__.values()
-                or s in [e.value for e in StressType]
-            ],
-            phenotyping_methods=[
-                PhenotypingMethod(m) for m in (phenotyping_methods or [])
-                if m in PhenotypingMethod.__members__.values()
-                or m in [e.value for e in PhenotypingMethod]
-            ],
+            facets=current_domain().validate_facets(facets),
             expertise_keywords=expertise_keywords or [],
             priority_novelty=priority_novelty,
             priority_relevance=priority_relevance,
             priority_methodology=priority_methodology,
             priority_reproducibility=priority_reproducibility,
-            available_equipment=available_equipment or [],
+            context=context or {},
             time_range_months=time_range_months,
             source_targets=source_targets or [],
         )
@@ -172,9 +160,7 @@ class LiteratureMiningAgent(Agent):
         return {
             "researcher_id": profile.researcher_id,
             "name": profile.name,
-            "plant_species": profile.plant_species,
-            "stress_types": [s.value for s in profile.stress_types],
-            "phenotyping_methods": [m.value for m in profile.phenotyping_methods],
+            "facets": profile.facets,
             "expertise_keywords": profile.expertise_keywords,
             "source_targets": profile.source_targets,
             "time_range_months": profile.time_range_months,
@@ -263,13 +249,13 @@ class LiteratureMiningAgent(Agent):
                     if sp.paper.published_date
                     else None
                 ),
-                "source": sp.paper.source.value,
+                "source": sp.paper.source,
                 "is_open_access": sp.paper.is_open_access,
                 "scores": {
                     "overall": round(sp.relevance.overall, 3),
-                    "species_match": round(sp.relevance.species_match, 3),
-                    "stress_match": round(sp.relevance.stress_match, 3),
-                    "method_match": round(sp.relevance.method_match, 3),
+                    "facets": {
+                        k: round(v, 3) for k, v in sp.relevance.facet_scores.items()
+                    },
                     "recency": round(sp.relevance.recency, 3),
                     "credibility": round(sp.relevance.credibility, 3),
                     "novelty": round(sp.relevance.novelty, 3),
@@ -331,7 +317,7 @@ class LiteratureMiningAgent(Agent):
                 k: v.isoformat()
                 for k, v in self.state.last_scan_time.items()
             },
-            "sources_available": list(FETCHER_REGISTRY.keys()),
+            "sources_available": list(source_registry()),
         }
 
     @loop

@@ -46,7 +46,6 @@ _GOOD_CRITIQUE = {
     "novelty": {"assessment": "novel", "reasoning": "No prior work found.", "closest_prior_work": None},
     "confounds": [],
     "evidence_strength": {"assessment": "well_supported", "reasoning": "Claims match abstracts."},
-    "feasibility_concerns": [],
     "overall_recommendation": "pursue",
     "summary": "Strong proposal.",
 }
@@ -83,7 +82,7 @@ async def test_critique_proposals_adds_critique_field():
         patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)),
     ):
-        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=["VNIR"])
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", context={})
 
     assert len(result) == 1
     assert result[0]["critique"] is not None
@@ -99,7 +98,7 @@ async def test_critique_proposals_none_on_failure():
         patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=None)),
     ):
-        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=[])
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", context={})
 
     assert result[0]["critique"] is None
 
@@ -115,7 +114,7 @@ async def test_critique_proposals_concurrent():
         patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch("utils.llm_critic.critique_proposal", new=mock_critique),
     ):
-        result = await agent.critique_proposals(proposals, researcher_id="r1", instruments=["VNIR"])
+        result = await agent.critique_proposals(proposals, researcher_id="r1", context={})
 
     assert mock_critique.call_count == 3
 
@@ -129,7 +128,7 @@ async def test_critique_proposals_preserves_existing_fields():
         patch("agents.rag_agent.get_llm_config", return_value=_make_mock_config()),
         patch("utils.llm_critic.critique_proposal", new=AsyncMock(return_value=_GOOD_CRITIQUE)),
     ):
-        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", instruments=[])
+        result = await agent.critique_proposals([_PROPOSAL], researcher_id="r1", context={})
 
     assert result[0]["suggestion"] == _PROPOSAL["suggestion"]
     assert result[0]["verification"] == _PROPOSAL["verification"]
@@ -174,9 +173,7 @@ async def test_synthesize_combinations_with_critique_false():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=["hyperspectral_imaging"],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             with_critique=False,
             max_iterations=0,
         )
@@ -221,9 +218,7 @@ async def test_synthesize_combinations_with_critique_true():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=["hyperspectral_imaging"],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             with_critique=True,
             max_iterations=0,
         )

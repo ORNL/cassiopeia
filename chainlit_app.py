@@ -35,6 +35,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 
+from domains import current_domain, term_text
+
 logger = logging.getLogger(__name__)
 
 load_dotenv(Path(__file__).parent / ".env")
@@ -46,17 +48,25 @@ _MODEL = os.environ.get("LLM_CHAT_MODEL", "anthropic/claude-haiku-4-5-20251001")
 _API_BASE = os.environ.get("API_BASE_URL", "http://localhost:8000")
 _DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:5173")
 
+_DOMAIN = current_domain()
+_FIELD = _DOMAIN.prompts.field
+_NOUN = _DOMAIN.prompts.proposal_noun
+_TOOL_NAME = _DOMAIN.ui.get("document_title") or f"{_DOMAIN.title} literature search"
+# Facets the researcher chooses in conversation; "select all" facets are filled in.
+_CHAT_FACETS = [f for f in _DOMAIN.facets if not f.select_all]
+_FACET_TOPICS = " and ".join(f.label.lower() for f in _CHAT_FACETS)
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prompts (LangGraph nodes only — profile collection is pure Python)
 # ──────────────────────────────────────────────────────────────────────────────
 
 _CLASSIFY_SYSTEM = """\
-You are a routing classifier for an automated plant biology literature search tool.
+You are a routing classifier for an automated {field} literature search tool.
 Classify the user's latest message into exactly one of:
 
-  "search"  — mentions plant species, stress conditions, research topics, or
-               anything related to plant biology literature, OR wants to run a search.
+  "search"  — mentions {topics}, research topics, or
+               anything related to {field} literature, OR wants to run a search.
                When in doubt, prefer "search" over "general".
 
   "anchor"  — wants to find papers SIMILAR TO a specific paper, identified by
@@ -67,7 +77,7 @@ Classify the user's latest message into exactly one of:
   "general" — ONLY clear off-topic messages: greetings, thanks, unrelated questions.
 
 Reply with ONLY the single word (no punctuation, no explanation).
-"""
+""".format(field=_FIELD, topics=_FACET_TOPICS)
 
 _ANCHOR_EXTRACT_SYSTEM = """\
 Extract the anchor paper identifier from the user's message.
@@ -77,19 +87,19 @@ If no clear identifier, return: {"doi_or_title": ""}
 """
 
 _GENERAL_SYSTEM = """\
-You are the conversational front-end of the APPL Literature Mining tool.
+You are the conversational front-end of the {tool} tool.
 All actual searches are performed by a backend pipeline — you CANNOT retrieve,
 list, or summarise papers yourself.
 
 Rules (never break them):
 - NEVER list, name, or describe any papers, authors, journals, or search results.
 - NEVER pretend to run a search or claim one is in progress.
-- If the user mentions species, stresses, or research topics, tell them to say
+- If the user mentions {topics}, or research topics, tell them to say
   something like "run a search" or "set up a search" so the system can collect
   their profile and trigger the real pipeline.
 - For greetings or off-topic messages, reply in one or two sentences and redirect
   towards running a literature scan.
-"""
+""".format(tool=_TOOL_NAME, topics=_FACET_TOPICS)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -98,31 +108,42 @@ Rules (never break them):
 
 # Human-readable labels for each topic
 _TOPIC_LABELS = {
-    "s1": "Plant species & stress conditions",
+    "s1": " & ".join(f.label for f in _CHAT_FACETS),
     "s2": "Research keywords & time range",
     "s3": "Literature sources & scoring priorities",
     "s4": "Anchor paper",
 }
 
 # Questions shown for each topic when it is still pending
+def _visible_values(facet) -> list[str]:
+    return [v.value for v in facet.vocabulary if not v.hidden]
+
+
+def _sources_with(access: str) -> str:
+    return " · ".join(k for k, s in _DOMAIN.sources.items() if s.access == access) or "—"
+
+
+_KEYWORD_EXAMPLES = _DOMAIN.ui.get("keyword_examples")
+
 _TOPIC_QUESTIONS = {
     "s1": (
-        "Which **plant species** do you work with, and what **stress conditions** "
-        "are you interested in?\n"
-        "**Species:** poplar · arabidopsis · soybean · sorghum · switchgrass · "
-        "miscanthus · pennycress · brachypodium\n"
-        "**Stresses:** drought · nutrient · temperature · pathogen · heavy_metal · "
-        "salinity · light · flooding"
+        "Tell me your "
+        + " and ".join(f"**{f.label.lower()}**" for f in _CHAT_FACETS)
+        + ".\n"
+        + "\n".join(
+            f"**{f.short_label or f.label}:** " + " · ".join(_visible_values(f))
+            for f in _CHAT_FACETS if _visible_values(f)
+        )
     ),
     "s2": (
-        "What are **2–4 research keywords** for your specific niche "
-        "*(e.g. root architecture, nitrogen uptake, canopy reflectance)*"
-        " — and how far back should we search? *(default: last 12 months)*"
+        "What are **2–4 research keywords** for your specific niche"
+        + (f" *(e.g. {_KEYWORD_EXAMPLES})*" if _KEYWORD_EXAMPLES else "")
+        + " — and how far back should we search? *(default: last 12 months)*"
     ),
     "s3": (
         "Which **literature sources** to include?\n"
-        "**Open access:** pubmed · biorxiv · plos_one · frontiers · arxiv\n"
-        "**Paywalled:** nature_communications · new_phytologist · plant_physiology\n"
+        f"**Open access:** {_sources_with('open')}\n"
+        f"**Paywalled:** {_sources_with('paywall')}\n"
         "*(say 'all' for all sources)*\n"
         "How should papers be **scored**? *(0.0–1.0, default 0.5)*: "
         "novelty · relevance · methodology · reproducibility"
@@ -136,19 +157,32 @@ _TOPIC_QUESTIONS = {
 
 _ALL_TOPICS = ("s1", "s2", "s3", "s4")
 
+def _facet_schema_lines() -> str:
+    lines = []
+    for f in _CHAT_FACETS:
+        allowed = _visible_values(f)
+        if f.open_vocabulary or not allowed:
+            spec = f"null or list of {f.label.lower()}"
+        else:
+            spec = f"null or list using ONLY: {', '.join(allowed)}"
+        lines.append(f'    "{f.key}": {spec}')
+    return ",\n".join(lines)
+
+
+_SOURCE_KEYS = ", ".join(_DOMAIN.sources)
+
 # One combined extractor — null means "not mentioned in this message"
 _FULL_EXTRACT_PROMPT = """\
 Extract research profile fields from the researcher's message.
 Return ONLY a JSON object. Use null for any field NOT explicitly mentioned — never invent defaults.
 
-{
-  "plant_species": null or list of species names,
-  "stress_types":  null or list using ONLY: drought, nutrient, temperature, pathogen,
-                   heavy_metal, salinity, light, flooding,
+{{
+  "facets": {{
+{facets}
+  }},
   "expertise_keywords": null or list of 2-6 short keyword phrases,
   "time_range_months":  null or integer (months to look back, e.g. 12),
-  "source_targets": null or list using ONLY: pubmed, biorxiv, plos_one, frontiers, arxiv,
-                    nature_communications, new_phytologist, plant_physiology.
+  "source_targets": null or list using ONLY: {sources}.
                     Use [] (empty list) if the user says "all" or "any",
   "priority_novelty":         null or float 0.0-1.0 (high=0.8, medium=0.5, low=0.3),
   "priority_relevance":       null or float 0.0-1.0,
@@ -157,18 +191,20 @@ Return ONLY a JSON object. Use null for any field NOT explicitly mentioned — n
   "anchor_paper": null if not mentioned,
                   "" (empty string) if the user says skip/no/none,
                   otherwise the DOI or paper title string
-}"""
+}}""".format(facets=_facet_schema_lines(), sources=_SOURCE_KEYS)
 
 _CORRECTION_EXTRACT = """\
 The researcher wants to correct their search profile. Extract only what changed.
 Return ONLY JSON with the fields to update (omit unchanged fields).
-Valid fields: plant_species (list), stress_types (list), expertise_keywords (list),
+Valid fields: facets (object with only the changed facets), expertise_keywords (list),
 source_targets (list), time_range_months (int), priority_novelty (float),
 priority_relevance (float), priority_methodology (float), priority_reproducibility (float),
 anchor_paper (string — empty string means no anchor).
-stress_types values: drought, nutrient, temperature, pathogen, heavy_metal, salinity, light, flooding
-source_targets values: pubmed, biorxiv, plos_one, frontiers, arxiv,
-  nature_communications, new_phytologist, plant_physiology. Empty list = all sources."""
+facets:
+{facets}
+source_targets values: {sources}. Empty list = all sources.""".format(
+    facets=_facet_schema_lines(), sources=_SOURCE_KEYS,
+)
 
 _ACK_SYSTEM = """\
 Acknowledge what the researcher just said in ONE short sentence (max 12 words).
@@ -224,7 +260,7 @@ async def _extract_correction(text: str) -> dict:
 def _topics_covered_by(extracted: dict) -> set[str]:
     """Return which topics were addressed in a single extraction result."""
     covered = set()
-    if extracted.get("plant_species") is not None or extracted.get("stress_types") is not None:
+    if any(v is not None for v in (extracted.get("facets") or {}).values()):
         covered.add("s1")
     if (extracted.get("expertise_keywords") is not None
             or extracted.get("time_range_months") is not None):
@@ -242,6 +278,10 @@ def _merge_into_profile(profile: dict, extracted: dict) -> None:
     """Update profile in-place with non-null fields from extraction."""
     for k, v in extracted.items():
         if v is None:
+            continue
+        if k == "facets":
+            facets = profile.setdefault("facets", {})
+            facets.update({fk: fv for fk, fv in (v or {}).items() if fv is not None})
             continue
         # Guard against nonsensical zero values that indicate the LLM
         # returned a default instead of null for an unspecified field.
@@ -269,10 +309,20 @@ def _all_topics_prompt() -> str:
     return "\n\n".join(lines)
 
 
+def _facet_lines(profile: dict, template: str) -> str:
+    facets = profile.get("facets") or {}
+    return "".join(
+        template.format(
+            label=f.short_label or f.label,
+            values=", ".join(term_text(v) for v in facets.get(f.key) or []) or "—",
+        ) + "\n"
+        for f in _CHAT_FACETS
+    )
+
+
 def _profile_summary(profile: dict) -> str:
     """Python-generated confirmation summary (no LLM involved)."""
-    species = ", ".join(profile.get("plant_species") or []) or "—"
-    stresses = ", ".join(profile.get("stress_types") or []) or "—"
+    facet_lines = _facet_lines(profile, "• **{label}** : {values}")
     keywords = ", ".join(profile.get("expertise_keywords") or []) or "—"
     sources = ", ".join(profile.get("source_targets") or []) or "all"
     months = profile.get("time_range_months") or 12  # 0 months is nonsensical, default to 12
@@ -283,8 +333,7 @@ def _profile_summary(profile: dict) -> str:
     anchor = profile.get("anchor_paper") or "—"
     return (
         "Here is what I have:\n\n"
-        f"• **Species**       : {species}\n"
-        f"• **Stresses**      : {stresses}\n"
+        f"{facet_lines}"
         f"• **Keywords**      : {keywords}\n"
         f"• **Sources**       : {sources}\n"
         f"• **Time range**    : last {months} months\n"
@@ -335,7 +384,13 @@ async def _handle_confirm_stage(text: str, text_lower: str) -> None:
         correction = await _extract_correction(text)
         profile = cl.user_session.get("pending_profile") or {}
         for k, v in correction.items():
-            if v not in (None, []):
+            if v in (None, []):
+                continue
+            if k == "facets":
+                profile.setdefault("facets", {}).update(
+                    {fk: fv for fk, fv in v.items() if fv not in (None, [])}
+                )
+            else:
                 profile[k] = v
         cl.user_session.set("pending_profile", profile)
         ack = await _ack(text)
@@ -545,26 +600,28 @@ async def _do_search(profile: dict) -> None:
     rname = cl.user_session.get("researcher_name") or rid
     profile["researcher_id"] = rid
     profile.setdefault("name", rname)
+    facets = profile.setdefault("facets", {})
+    for f in _DOMAIN.facets:
+        if f.select_all:
+            facets[f.key] = _visible_values(f)
 
-    species = ", ".join(profile.get("plant_species") or []) or "—"
-    stresses = ", ".join(profile.get("stress_types") or []) or "—"
+    facet_lines = _facet_lines(profile, "- {label}: {values}")
     keywords = ", ".join(profile.get("expertise_keywords") or []) or "—"
     sources = ", ".join(profile.get("source_targets") or []) or "all sources"
     months = profile.get("time_range_months", 12)
 
     await cl.Message(content=(
         f"🔍 **Searching literature for {rname}…**\n"
-        f"- Species: {species}\n"
-        f"- Stresses: {stresses}\n"
+        f"{facet_lines}"
         f"- Keywords: {keywords}\n"
         f"- Sources: {sources} · last {months} months\n\n"
         "*Fetching and scoring papers — this may take a few minutes.*"
     )).send()
 
     logger.info(
-        "Sending search to API: researcher=%s species=%s stresses=%s "
+        "Sending search to API: researcher=%s facets=%s "
         "sources=%s keywords=%s months=%s priorities=n%.1f/r%.1f/m%.1f/rep%.1f",
-        rid, profile.get("plant_species"), profile.get("stress_types"),
+        rid, facets,
         profile.get("source_targets"), profile.get("expertise_keywords"), months,
         profile.get("priority_novelty", 0.5), profile.get("priority_relevance", 0.5),
         profile.get("priority_methodology", 0.5), profile.get("priority_reproducibility", 0.5),
@@ -681,7 +738,7 @@ async def on_start() -> None:
         cl.user_session.set("researcher_name", None)
         cl.user_session.set("awaiting_name", True)
         await cl.Message(
-            content="Hi! I'm your plant biology literature assistant.\n\nWhat's your name?"
+            content=f"Hi! I'm your {_FIELD} literature assistant.\n\nWhat's your name?"
         ).send()
 
 
@@ -737,8 +794,7 @@ async def _welcome(name: str, researcher_id: str) -> None:
         # ResearcherProfile stores priorities as flat keys (priority_novelty etc.),
         # not under a nested "priorities" dict.
         pending = {
-            "plant_species":            stored.get("plant_species") or [],
-            "stress_types":             stored.get("stress_types") or [],
+            "facets":                   stored.get("facets") or {},
             "expertise_keywords":       stored.get("expertise_keywords") or [],
             "source_targets":           stored.get("source_targets") or [],
             "time_range_months":        stored.get("time_range_months", 12),
@@ -761,7 +817,7 @@ async def _welcome(name: str, researcher_id: str) -> None:
         first_q = f"**{_TOPIC_LABELS['s1']}**\n{_TOPIC_QUESTIONS['s1']}"
         await cl.Message(
             content=(
-                f"Hi, **{name}**! I'm your plant biology literature assistant.\n\n"
+                f"Hi, **{name}**! I'm your {_FIELD} literature assistant.\n\n"
                 f"Let's start a new search.\n\n{first_q}"
             )
         ).send()
@@ -859,7 +915,6 @@ async def on_message(message: cl.Message) -> None:
 # Display helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-_FEASIBILITY_ICONS = {"true": "✓", "partial": "~", "false": "✗"}
 _CREDIBILITY_ICONS = {
     "high": "🟢", "moderate": "🟡", "preliminary": "🔴", "conflicting": "⚠️"
 }
@@ -878,12 +933,11 @@ def _format_paper_rich(p: dict) -> str:
     cred_icon = _CREDIBILITY_ICONS.get(p.get("credibility_level", ""), "❓")
     cred_label = (p.get("credibility_level") or "?").capitalize()
     scores = p.get("scores", {})
-    score_str = (
-        f"Overall **{scores.get('overall', 0):.2f}** · "
-        f"Species {scores.get('species_match', 0):.2f} · "
-        f"Stress {scores.get('stress_match', 0):.2f} · "
-        f"Method {scores.get('method_match', 0):.2f} · "
-        f"Novelty {scores.get('novelty', 0):.2f}"
+    facet_scores = scores.get("facets", {})
+    score_str = " · ".join(
+        [f"Overall **{scores.get('overall', 0):.2f}**"]
+        + [f"{f.short_label or f.label} {facet_scores.get(f.key, 0):.2f}" for f in _DOMAIN.facets]
+        + [f"Novelty {scores.get('novelty', 0):.2f}"]
     )
     return (
         f"**{p.get('rank', '?')}. {title_md}**\n"
@@ -917,11 +971,12 @@ def _format_verification(v: dict | None) -> str:
 
 def _format_rag_combo(c: dict) -> str:
     theme = f"**[{c['theme']}]** " if c.get("theme") else ""
-    fdata = c.get("feasibility") or {}
-    feasible = fdata.get("feasible")
-    fkey = feasible if isinstance(feasible, str) else str(feasible).lower()
-    ficon = _FEASIBILITY_ICONS.get(fkey, "")
-    fstr = f" `{ficon}`" if ficon else ""
+    badges = [
+        evaluator.summary(c.get(evaluator.key))
+        for evaluator in _DOMAIN.evaluators
+        if c.get(evaluator.key) and hasattr(evaluator, "summary")
+    ]
+    fstr = "".join(f" `{b}`" for b in badges if b)
     warn = f"\n  ⚠ *{c['novelty_warning']}*" if c.get("novelty_warning") else ""
     rationale = f"\n  > {c['rationale']}" if c.get("rationale") else ""
     insights_str = _format_insights(c.get("key_insights") or [])
@@ -950,7 +1005,7 @@ async def _display_combos(results: dict) -> None:
 
     if rag_combos:
         await cl.Message(
-            content="## 💡 AI-Synthesised Experiment Proposals\n"
+            content=f"## 💡 AI-Synthesised {_NOUN.capitalize()} Proposals\n"
                     "*Cross-paper reasoning — grouped by theme. "
                     "React with 👍/👎 to personalise future searches.*"
         ).send()
@@ -1037,7 +1092,7 @@ async def _display_results(results: dict) -> None:
     options = []
     if rag_combos or combos:
         n = len(rag_combos) + len(combos)
-        options.append(f"type **combos** to see {n} experiment proposal(s)")
+        options.append(f"type **combos** to see {n} {_NOUN} proposal(s)")
     if contradictions:
         options.append(f"type **contradictions** to see {len(contradictions)} conflict(s)")
 

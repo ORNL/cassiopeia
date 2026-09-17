@@ -191,9 +191,7 @@ async def test_synthesize_combinations_has_verification_field():
     ):
         results = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=["hyperspectral_imaging"],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=0,
         )
 

@@ -1,0 +1,79 @@
+# Copyright (c) 2026, OPAL, ORNL, UT-Battelle, LLC
+# SPDX-License-Identifier: Apache-2.0
+#
+# Test-only domain pack.  The core test suite runs against it so that nothing
+# in the generic pipeline can quietly depend on a real community's vocabulary.
+# It declares no context, evaluators or critique dimensions — a computational
+# community with no instruments.
+
+name: materials_test
+title: Battery materials (test pack)
+
+facets:
+  - key: material
+    label: Materials
+    role: subject
+    widget: cards
+    annotate: true
+    query_default: material
+    synonyms: 2
+    group_size: 3
+    description: how well the paper's materials match the researcher's materials
+    synonym_guidance: 2-3 synonyms (chemical formula, common name).
+    vocabulary:
+      - {value: lithium_iron_phosphate, label: LFP, detail: LiFePO4, aliases: [lifepo4, lithium iron phosphate]}
+      - {value: graphite, label: Graphite, aliases: [graphite]}
+
+  - key: property
+    label: Properties
+    short_label: Property
+    role: condition
+    annotate: true
+    open_vocabulary: false
+    query_default: property
+    synonyms: 3
+    group_size: 4
+    description: how well the paper's measured properties match
+    hints:
+      template: "Paper studies {term} — relate it to your {selected} work"
+      terms: [conductivity, capacity fade]
+    vocabulary:
+      - {value: ionic_conductivity, label: Ionic conductivity, aliases: [ionic conductivity]}
+      - {value: capacity_fade, label: Capacity fade, aliases: [capacity fade, capacity loss]}
+      - {value: thermal_runaway, label: Thermal runaway, hidden: true}
+
+  - key: technique
+    label: Techniques
+    role: technique
+    open_vocabulary: false
+    widget: none
+    select_all: true
+    vocabulary:
+      - {value: dft, label: DFT}
+      - {value: xrd, label: XRD}
+
+sources:
+  - {key: preprints, label: Preprints, backend: europepmc, filter: "SRC:PPR",
+     access: open, impact: low, preprint: true, description: Preprints}
+  - {key: flagship, label: Flagship Journal, backend: europepmc, filter: 'JOURNAL:"Nature Materials"',
+     access: paywall, impact: high, description: High-impact journal}
+  - {key: arxiv, label: arXiv, backend: arxiv, access: open, impact: low, preprint: true,
+     description: Preprints, synonym_override: [first principles, simulation]}
+
+credibility:
+  high_impact_journals: [nature materials]
+  mid_impact_journals: [journal of power sources]
+
+prompts:
+  field: electrochemistry
+  proposal_noun: study
+  theme_example: interface stability
+  critique_subject: battery materials study
+  fallback_query: battery materials
+
+ui:
+  app_name: TEST
+
+legacy:
+  facets: {chemistries: material}
+  scores: {chemistry_match: material}

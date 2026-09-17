@@ -4,17 +4,17 @@
 """Source fetchers for literature repositories.
 
 Each fetcher implements the same interface: given a SearchQuery, return a list
-of PaperMetadata.
+of PaperMetadata.  Which sources exist is decided by the active domain pack;
+this module only provides the *backends* a pack source can use:
 
-Two backends are used:
-  - Europe PMC  (https://europepmc.org/RestfulWebService)
-    Covers: bioRxiv preprints, PubMed/MEDLINE, Frontiers, PLoS ONE,
-            Nature Communications, New Phytologist, Plant Physiology.
+  - ``europepmc`` — Europe PMC (https://europepmc.org/RestfulWebService).
+    Option ``filter`` narrows the search (``SRC:PPR``, ``JOURNAL:"..."``, …).
     Free, no API key required.  Returns full abstracts in search results.
 
-  - arXiv Atom API  (https://arxiv.org/help/api)
-    Covers: arXiv preprints.
+  - ``arxiv`` — arXiv Atom API (https://arxiv.org/help/api).
     Free, no API key required.
+
+A pack can add backends from its ``hooks.py`` with :func:`register_backend`.
 """
 
 from __future__ import annotations
@@ -23,17 +23,15 @@ import asyncio
 import logging
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Literal
-
 import os
-
 import re
+from typing import Any
 
 import aiohttp
 
-from models.schemas import PaperMetadata, SearchQuery, SourceType
+from domains import SourceInfo, current_domain
+from models.schemas import PaperMetadata, SearchQuery
 
 # Matches tokens that need no quoting in Lucene-style query strings.
 # Anything containing spaces, hyphens, slashes, etc. must be quoted.
@@ -67,7 +65,12 @@ def _session(**kwargs) -> aiohttp.ClientSession:
 class BaseFetcher(ABC):
     """Abstract base for all source fetchers."""
 
-    source_type: SourceType
+    def __init__(self, source: SourceInfo) -> None:
+        self.source = source
+
+    @property
+    def source_key(self) -> str:
+        return self.source.key
 
     @abstractmethod
     async def fetch(
@@ -83,24 +86,30 @@ class BaseFetcher(ABC):
         """Retrieve full text if available (open-access only)."""
         ...
 
+    async def lookup_abstract(self, doi_or_title: str) -> str:
+        """Resolve a DOI or title to an abstract; empty when unsupported."""
+        return ""
+
 
 # ─────────────────────────────────────────────────────
 # Europe PMC base
 # ─────────────────────────────────────────────────────
 
-class _EuropePMCFetcher(BaseFetcher):
-    """Base fetcher backed by Europe PMC.
+class EuropePMCFetcher(BaseFetcher):
+    """Fetcher backed by Europe PMC.
 
-    Subclasses set `source_type` and `source_filter` to specialise the query.
-    `source_filter` is prepended to the keyword terms, e.g.:
-        'SRC:PPR'                        → bioRxiv / medRxiv preprints
-        'SRC:MED'                        → PubMed / MEDLINE
-        'JOURNAL:"PLOS ONE"'             → PLOS ONE only
-        'PUBLISHER:"Frontiers Media SA"' → all Frontiers journals
+    The source's ``filter`` option is prepended to the keyword terms, e.g.:
+        'SRC:PPR'                → preprint servers
+        'SRC:MED'                → MEDLINE
+        'JOURNAL:"<title>"'      → one journal
+        'PUBLISHER:"<name>"'     → all journals of a publisher
     """
 
     BASE_URL = "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
-    source_filter: str = ""
+
+    @property
+    def source_filter(self) -> str:
+        return self.source.options.get("filter", "")
 
     async def fetch(
         self,
@@ -250,6 +259,30 @@ class _EuropePMCFetcher(BaseFetcher):
         )
         return {"other": all_text} if all_text else None
 
+    async def lookup_abstract(self, doi_or_title: str) -> str:
+        """Resolve a DOI or title fragment to an abstract across all of Europe PMC."""
+        if doi_or_title.startswith("10."):
+            query = f"DOI:{doi_or_title}"
+        else:
+            escaped = doi_or_title.replace('"', "")
+            query = f'TITLE:"{escaped}"'
+        params = {"query": query, "format": "json", "pageSize": "1", "resultType": "core"}
+        try:
+            async with _session() as session:
+                async with session.get(
+                    self.BASE_URL, params=params, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    if resp.status != 200:
+                        return ""
+                    data = await resp.json()
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            logger.warning("Europe PMC abstract lookup failed: %s", exc)
+            return ""
+        results = data.get("resultList", {}).get("result", [])
+        if not results:
+            return ""
+        return results[0].get("abstractText") or results[0].get("title", "")
+
     def _parse_europepmc(self, data: dict[str, Any]) -> list[PaperMetadata]:
         papers: list[PaperMetadata] = []
         for item in data.get("resultList", {}).get("result", []):
@@ -269,7 +302,7 @@ class _EuropePMCFetcher(BaseFetcher):
                     title=item.get("title", "").rstrip("."),
                     authors=authors,
                     abstract=item.get("abstractText", ""),
-                    source=self.source_type,
+                    source=self.source_key,
                     doi=doi,
                     url=f"https://doi.org/{doi}" if doi else None,
                     published_date=self._parse_date(
@@ -297,66 +330,6 @@ class _EuropePMCFetcher(BaseFetcher):
 
 
 # ─────────────────────────────────────────────────────
-# Europe PMC — concrete fetchers
-# ─────────────────────────────────────────────────────
-
-class BioRxivFetcher(_EuropePMCFetcher):
-    """Preprints (bioRxiv, medRxiv) via Europe PMC SRC:PPR filter."""
-
-    source_type = SourceType.BIORXIV
-    source_filter = "SRC:PPR"
-
-
-class PubMedFetcher(_EuropePMCFetcher):
-    """PubMed / MEDLINE via Europe PMC SRC:MED filter.
-
-    The api_key parameter is retained for compatibility but is not used
-    by the Europe PMC backend.
-    """
-
-    source_type = SourceType.PUBMED
-    source_filter = "SRC:MED"
-
-    def __init__(self, api_key: str | None = None) -> None:
-        self.api_key = api_key  # unused, kept for API compatibility
-
-
-class FrontiersFetcher(_EuropePMCFetcher):
-    """All Frontiers journals via Europe PMC publisher filter."""
-
-    source_type = SourceType.FRONTIERS
-    source_filter = 'PUBLISHER:"Frontiers Media SA"'
-
-
-class PlosOneFetcher(_EuropePMCFetcher):
-    """PLOS ONE via Europe PMC journal filter."""
-
-    source_type = SourceType.PLOS_ONE
-    source_filter = 'JOURNAL:"PLOS ONE"'
-
-
-class NatureCommsFetcher(_EuropePMCFetcher):
-    """Nature Communications via Europe PMC journal filter."""
-
-    source_type = SourceType.NATURE_COMMS
-    source_filter = 'JOURNAL:"Nature Communications"'
-
-
-class NewPhytologistFetcher(_EuropePMCFetcher):
-    """New Phytologist via Europe PMC journal filter."""
-
-    source_type = SourceType.NEW_PHYTOLOGIST
-    source_filter = 'JOURNAL:"New Phytologist"'
-
-
-class PlantPhysiologyFetcher(_EuropePMCFetcher):
-    """Plant Physiology via Europe PMC journal filter."""
-
-    source_type = SourceType.PLANT_PHYSIOLOGY
-    source_filter = 'JOURNAL:"Plant Physiology"'
-
-
-# ─────────────────────────────────────────────────────
 # arXiv  (Atom API — distinct from Europe PMC)
 # ─────────────────────────────────────────────────────
 
@@ -367,7 +340,6 @@ class ArxivFetcher(BaseFetcher):
     Searches title, abstract, and all fields.  No API key required.
     """
 
-    source_type = SourceType.ARXIV
     BASE_URL = "https://export.arxiv.org/api/query"
     _NS = {
         "atom": "http://www.w3.org/2005/Atom",
@@ -529,7 +501,7 @@ class ArxivFetcher(BaseFetcher):
                     title=title,
                     authors=authors,
                     abstract=abstract,
-                    source=SourceType.ARXIV,
+                    source=self.source_key,
                     doi=doi,
                     url=f"https://arxiv.org/abs/{arxiv_id}",
                     published_date=published_date,
@@ -543,32 +515,23 @@ class ArxivFetcher(BaseFetcher):
 
 
 # ─────────────────────────────────────────────────────
-# Source registry — single source of truth for all source metadata
+# Backend registry
 # ─────────────────────────────────────────────────────
 
-@dataclass(frozen=True)
-class SourceInfo:
-    """Metadata for a literature source."""
-    fetcher: type[BaseFetcher]
-    access: Literal["open", "paywall"]
-    impact: Literal["high", "mid", "low"]
-    label: str
-
-
-SOURCE_REGISTRY: dict[SourceType, SourceInfo] = {
-    SourceType.BIORXIV:          SourceInfo(BioRxivFetcher,           "open",    "low",  "bioRxiv"),
-    SourceType.PUBMED:           SourceInfo(PubMedFetcher,            "paywall", "low",  "PubMed"),
-    SourceType.FRONTIERS:        SourceInfo(FrontiersFetcher,         "open",    "mid",  "Frontiers"),
-    SourceType.PLOS_ONE:         SourceInfo(PlosOneFetcher,           "open",    "mid",  "PLoS ONE"),
-    SourceType.NATURE_COMMS:     SourceInfo(NatureCommsFetcher,       "paywall", "high", "Nature Comms"),
-    SourceType.NEW_PHYTOLOGIST:  SourceInfo(NewPhytologistFetcher,    "paywall", "high", "New Phytologist"),
-    SourceType.PLANT_PHYSIOLOGY: SourceInfo(PlantPhysiologyFetcher,   "paywall", "high", "Plant Physiology"),
-    SourceType.ARXIV:            SourceInfo(ArxivFetcher,             "open",    "low",  "arXiv"),
+BACKENDS: dict[str, type[BaseFetcher]] = {
+    "europepmc": EuropePMCFetcher,
+    "arxiv": ArxivFetcher,
 }
 
-FETCHER_REGISTRY: dict[SourceType, type[BaseFetcher]] = {
-    src: info.fetcher for src, info in SOURCE_REGISTRY.items()
-}
+
+def register_backend(name: str, fetcher_cls: type[BaseFetcher]) -> None:
+    """Make a fetcher class available to domain-pack sources as ``backend: name``."""
+    BACKENDS[name] = fetcher_cls
+
+
+def source_registry() -> dict[str, SourceInfo]:
+    """The active domain pack's sources, keyed by source key."""
+    return current_domain().sources
 
 
 def _epmc_query_terms(query: SearchQuery) -> str:
@@ -608,14 +571,17 @@ def _arxiv_query_terms(query: SearchQuery) -> str:
             parts.append(f"({_OR.join(tokens)})" if len(tokens) > 1 else tokens[0])
         if parts:
             return _AND.join(parts)
-    # Cap at 2 terms: arXiv has sparse plant-biology coverage; 3-way ANDs
-    # with rare species almost always return 0.
+    # Cap at 2 terms: arXiv coverage is sparse outside its core fields, and
+    # 3-way ANDs with rare terms almost always return 0.
     return _AND.join(_tok(t) for t in query.base_terms[:2] if t)
 
 
-def get_fetcher(source: SourceType, **kwargs: Any) -> BaseFetcher:
-    """Get the appropriate fetcher for a source type."""
-    cls = FETCHER_REGISTRY.get(source)
+def get_fetcher(source_key: str) -> BaseFetcher:
+    """Instantiate the fetcher for one of the active pack's sources."""
+    info = source_registry().get(source_key)
+    if info is None:
+        raise ValueError(f"Unknown source {source_key!r}")
+    cls = BACKENDS.get(info.backend)
     if cls is None:
-        raise ValueError(f"No fetcher registered for {source}")
-    return cls(**kwargs)
+        raise ValueError(f"No fetcher backend {info.backend!r} (source {source_key!r})")
+    return cls(info)

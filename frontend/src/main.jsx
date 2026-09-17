@@ -9,6 +9,7 @@ import LandingPage from "./LandingPage.jsx";
 import Settings from "./Settings.jsx";
 import { AuthProvider, useAuth } from "./auth/AuthContext.jsx";
 import { apiJson } from "./api.js";
+import { DomainProvider, useDomain } from "./domain.jsx";
 
 // ── Priority config ──────────────────────────────────────────────────────────
 
@@ -18,10 +19,16 @@ const DEFAULT_PRIORITIES = {
 
 const PRIORITY_LABELS = [
   { key: "novelty",         label: "Novelty",         desc: "Prefer unique, unexplored approaches" },
-  { key: "relevance",       label: "Relevance",       desc: "Match to your species and stress focus" },
-  { key: "methodology",     label: "Methodology",     desc: "Alignment with your phenotyping methods" },
+  { key: "relevance",       label: "Relevance",       desc: "Match to your research focus" },
+  { key: "methodology",     label: "Methodology",     desc: "Alignment with your methods" },
   { key: "reproducibility", label: "Reproducibility", desc: "Evidence quality and source credibility" },
 ];
+
+/** Priority sliders, with descriptions the domain pack may reword. */
+function usePriorityLabels() {
+  const overrides = useDomain().ui.priority_descriptions || {};
+  return PRIORITY_LABELS.map((p) => ({ ...p, desc: overrides[p.key] || p.desc }));
+}
 
 function loadPriorities(id) {
   try {
@@ -94,6 +101,7 @@ Slider.propTypes = {
 // ── PriorityModal ─────────────────────────────────────────────────────────────
 
 function PriorityModal({ priorities, scanSettings, onSave, onClose }) {
+  const priorityLabels = usePriorityLabels();
   const [local, setLocal] = useState({ ...priorities });
   const [localScan, setLocalScan] = useState({ ...scanSettings });
   const set = (k) => (v) => setLocal((p) => ({ ...p, [k]: v }));
@@ -115,7 +123,7 @@ function PriorityModal({ priorities, scanSettings, onSave, onClose }) {
 
         <p style={MS.sectionLabel}>Paper ranking weights</p>
         <p style={MS.sub}>Adjust how papers are scored against your profile.</p>
-        {PRIORITY_LABELS.map(({ key, label, desc }) => (
+        {priorityLabels.map(({ key, label, desc }) => (
           <Slider key={key} label={label} value={local[key]} onChange={set(key)} description={desc} />
         ))}
 
@@ -177,6 +185,8 @@ PriorityModal.propTypes = {
 // ── PrioritySetupStep ─────────────────────────────────────────────────────────
 
 function PrioritySetupStep({ name, onSave }) {
+  const priorityLabels = usePriorityLabels();
+  const appName = useDomain().ui.app_name || "CASSIOPEIA";
   const [prefs, setPrefs]     = useState({ ...DEFAULT_PRIORITIES });
   const [scan,  setScan]      = useState({ ...DEFAULT_SCAN_SETTINGS });
   const set = (k) => (v) => setPrefs((p) => ({ ...p, [k]: v }));
@@ -184,7 +194,7 @@ function PrioritySetupStep({ name, onSave }) {
   return (
     <div style={PS.root}>
       <div style={PS.card}>
-        <div style={PS.badge}>CASSIOPEIA</div>
+        <div style={PS.badge}>{appName}</div>
         <h2 style={PS.title}>Welcome, {name}</h2>
         <p style={PS.sub}>
           Configure your search before diving in. You can adjust everything
@@ -193,7 +203,7 @@ function PrioritySetupStep({ name, onSave }) {
 
         <p style={MS.sectionLabel}>Paper ranking weights</p>
         <p style={{ ...MS.sub, margin: "0 0 16px" }}>Controls how papers are scored against your profile.</p>
-        {PRIORITY_LABELS.map(({ key, label, desc }) => (
+        {priorityLabels.map(({ key, label, desc }) => (
           <Slider key={key} label={label} value={prefs[key]} onChange={set(key)} description={desc} />
         ))}
 
@@ -459,9 +469,11 @@ function SplashScreen() {
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
-    <AuthProvider>
-      <App />
-    </AuthProvider>
+    <DomainProvider>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </DomainProvider>
   </StrictMode>
 );
 

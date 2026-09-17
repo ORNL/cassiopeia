@@ -8,7 +8,7 @@ APPL-Agent (or any other MCP-compatible orchestrator) can call them via
 the Streamable HTTP transport.
 
 The tool return convention mirrors APPL-Agent's ``ToolResult`` schema so
-that the caller can parse responses uniformly regardless of which APPL
+that the caller can parse responses uniformly regardless of which
 subsystem is being invoked.
 
 Run with:
@@ -42,6 +42,7 @@ from pydantic import BaseModel
 
 from academy.logging import init_logging
 
+from domains import current_domain
 from utils.agent_bridge import _call, launch_agents
 from utils.persistence import PaperStore
 
@@ -116,11 +117,6 @@ asgi_app = mcp.streamable_http_app()
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 
-def _facility_equipment() -> list[str]:
-    raw = os.environ.get("FACILITY_EQUIPMENT", "")
-    return [e.strip() for e in raw.split(",") if e.strip()]
-
-
 _RAG_AGENT = "RAG agent"
 
 
@@ -137,9 +133,7 @@ def _not_ready(tool_name: str, component: str = "Mining agent") -> str:
 async def search_literature(
     researcher_id: str,
     name: str,
-    plant_species: list[str],
-    stress_types: list[str],
-    phenotyping_methods: list[str],
+    facets: dict[str, list[str]],
     expertise_keywords: list[str],
     time_range_months: int = 12,
     priority_novelty: float = 0.5,
@@ -151,12 +145,15 @@ async def search_literature(
 ) -> str:
     """Run a full literature search cycle for a researcher profile.
 
+    ``facets`` maps the deployment's profile facets to selected values — call
+    ``describe_domain`` for the facet keys and vocabularies this server accepts.
+
     Returns a ToolResult (code 301) whose ``result`` dict contains:
 
     - ``papers``: top scored papers
     - ``combos``: per-paper hypotheses
-    - ``rag_combos``: cross-paper proposals with feasibility, verification, and
-      (when ``with_critique=True``) critic annotations. Each proposal shape::
+    - ``rag_combos``: cross-paper proposals with verification, domain-pack
+      evaluator results, and (when ``with_critique=True``) critic annotations. Each proposal shape::
 
           {
             "proposal_id": str,
@@ -169,7 +166,7 @@ async def search_literature(
             ],
             "supporting_papers": [str],
             "novelty_warning": str,
-            "feasibility": {...},      # present after assess_feasibility
+            "<evaluator key>": {...},  # one per applicable domain-pack evaluator
             "verification": {          # Augmentation A — always present
               "checked_claims": int,
               "supported": int,
@@ -192,7 +189,7 @@ async def search_literature(
                 "assessment": "well_supported" | "partial" | "overreaching",
                 "reasoning": str
               },
-              "feasibility_concerns": [{"concern": str, "severity": "low"|"medium"|"high"}],
+              "<pack dimension>": [{"concern": str, "severity": "low"|"medium"|"high"}],
               "overall_recommendation": "pursue" | "refine" | "deprioritize",
               "summary": str
             }                          # None if the critic LLM call failed
@@ -227,17 +224,17 @@ async def search_literature(
     if _mining_handle is None or _rag_handle is None:
         return _not_ready("search_literature")
 
-    equipment = _facility_equipment()
+    domain = current_domain()
+    context = domain.load_context()
+    facets = domain.validate_facets(facets)
 
     await _call(
         _mining_handle.register_researcher(
             researcher_id=researcher_id,
             name=name,
-            plant_species=plant_species,
-            stress_types=stress_types,
-            phenotyping_methods=phenotyping_methods,
+            facets=facets,
             expertise_keywords=expertise_keywords,
-            available_equipment=equipment,
+            context=context,
             priority_novelty=priority_novelty,
             priority_relevance=priority_relevance,
             priority_methodology=priority_methodology,
@@ -262,21 +259,20 @@ async def search_literature(
             rag_combos = await _call(
                 _rag_handle.synthesize_combinations(
                     researcher_id=researcher_id,
-                    species=plant_species,
-                    stresses=stress_types,
-                    methods=phenotyping_methods,
+                    facets=facets,
                     keywords=expertise_keywords,
                     liked_proposals=liked or None,
                     with_critique=with_critique,
-                    instruments=equipment,
+                    context=context,
                 )
             )
 
-            if rag_combos and equipment:
+            if rag_combos:
                 rag_combos = await _call(
-                    _rag_handle.assess_feasibility(
+                    _rag_handle.evaluate_proposals(
                         proposals=rag_combos,
-                        available_equipment=equipment,
+                        researcher_id=researcher_id,
+                        context=context,
                     )
                 )
         except Exception as exc:
@@ -288,9 +284,7 @@ async def search_literature(
             researcher_id=researcher_id,
             profile_snap={
                 "name": name,
-                "plant_species": plant_species,
-                "stress_types": stress_types,
-                "phenotyping_methods": phenotyping_methods,
+                "facets": facets,
                 "expertise_keywords": expertise_keywords,
             },
             n_papers=len(papers),
@@ -306,6 +300,18 @@ async def search_literature(
             "rag_combos": rag_combos,
         },
         tool_name="search_literature",
+    ).model_dump_json()
+
+
+@mcp.tool()
+async def describe_domain() -> str:
+    """Describe this deployment's domain pack: profile facets and their
+    vocabularies, literature sources, critique dimensions and evaluators.
+
+    Returns a ToolResult (code 301) whose ``result`` is the pack manifest.
+    """
+    return ToolResult(
+        code=301, result=current_domain().manifest(), tool_name="describe_domain"
     ).model_dump_json()
 
 
@@ -358,9 +364,9 @@ async def anchor_search(
 ) -> str:
     """Find papers in the knowledge base semantically similar to an anchor paper.
 
-    ``doi_or_title`` can be a DOI (e.g. ``10.1093/plphys/kiad123``) or a
-    free-text title fragment.  The agent fetches the abstract from Europe PMC
-    and uses it as a semantic query seed against ChromaDB.
+    ``doi_or_title`` can be a DOI or a free-text title fragment.  The agent
+    resolves the abstract through the deployment's literature sources and uses
+    it as a semantic query seed against ChromaDB.
     """
     if _rag_handle is None:
         return _not_ready("anchor_search", _RAG_AGENT)

@@ -8,50 +8,32 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 
+from domains import DomainPack, Facet, current_domain, term_text
 from models.schemas import (
     CredibilityLevel,
     PaperMetadata,
     RelevanceScore,
     ResearcherProfile,
     ScoredPaper,
-    SourceType,
 )
-from utils.source_fetchers import SOURCE_REGISTRY
 
 
 class PaperScorer:
     """Scores and ranks papers against a researcher's profile.
 
     Scoring dimensions:
-    - species_match:  How well the paper matches target species
-    - stress_match:   How well the paper matches target stress types
-    - method_match:   Alignment with preferred phenotyping methods
+    - one match score per facet declared by the domain pack
     - recency:        Preference for recent publications
     - credibility:    Based on journal, citation count, open-access status
     - novelty:        Uniqueness relative to already-scored papers
     """
 
-    # Journal impact tiers for credibility scoring
-    HIGH_IMPACT_JOURNALS = {
-        "nature", "science", "cell", "nature communications",
-        "new phytologist", "plant cell", "plant physiology",
-        "the plant journal", "nature plants",
-    }
+    def __init__(self, domain: DomainPack | None = None) -> None:
+        self._domain = domain
 
-    MID_IMPACT_JOURNALS = {
-        "frontiers in plant science", "plos one", "bmc plant biology",
-        "plant methods", "journal of experimental botany",
-        "annals of botany",
-    }
-
-    # Source-level tier fallback used when the journal field is not populated.
-    # Derived from SOURCE_REGISTRY so adding new sources only requires one change.
-    _HIGH_IMPACT_SOURCES = frozenset(
-        src for src, info in SOURCE_REGISTRY.items() if info.impact == "high"
-    )
-    _MID_IMPACT_SOURCES = frozenset(
-        src for src, info in SOURCE_REGISTRY.items() if info.impact == "mid"
-    )
+    @property
+    def domain(self) -> DomainPack:
+        return self._domain or current_domain()
 
     def score_paper(
         self,
@@ -61,24 +43,23 @@ class PaperScorer:
     ) -> ScoredPaper:
         """Score a single paper against a researcher profile."""
         relevance = RelevanceScore(
-            species_match=self._score_species(paper, profile),
-            stress_match=self._score_stress(paper, profile),
-            method_match=self._score_method(paper, profile),
+            facet_scores=self.facet_scores(paper, profile),
             recency=self._score_recency(paper),
             credibility=self._score_credibility(paper),
             novelty=self._score_novelty(paper, existing_papers or []),
         )
-        relevance.overall = relevance.weighted_score(profile)
-
-        credibility = self._assess_credibility(paper)
-        combinations = self._suggest_combinations(paper, profile)
+        relevance.overall = self.overall(relevance, profile)
 
         return ScoredPaper(
             paper=paper,
             relevance=relevance,
-            credibility=credibility,
-            suggested_combinations=combinations,
+            credibility=self._assess_credibility(paper),
+            suggested_combinations=self._suggest_combinations(paper, profile),
         )
+
+    def overall(self, relevance: RelevanceScore, profile: ResearcherProfile) -> float:
+        priorities = {f.key: f.priority for f in self.domain.facets}
+        return relevance.weighted_score(profile, priorities)
 
     def rank_papers(
         self,
@@ -93,48 +74,24 @@ class PaperScorer:
 
     # ── Individual scoring dimensions ──────────────────
 
-    def _score_species(
+    def facet_scores(
         self,
         paper: PaperMetadata,
         profile: ResearcherProfile,
-    ) -> float:
+    ) -> dict[str, float]:
         text = f"{paper.title} {paper.abstract}".lower()
-        if not profile.plant_species:
-            return 0.5
-        matches = sum(
-            1 for sp in profile.plant_species if sp.lower() in text
-        )
-        return min(matches / len(profile.plant_species), 1.0)
+        return {
+            f.key: self._score_facet(text, f, profile.terms(f.key))
+            for f in self.domain.facets
+        }
 
-    def _score_stress(
-        self,
-        paper: PaperMetadata,
-        profile: ResearcherProfile,
-    ) -> float:
-        text = f"{paper.title} {paper.abstract}".lower()
-        if not profile.stress_types:
+    @staticmethod
+    def _score_facet(text: str, facet: Facet, values: list[str]) -> float:
+        """Fraction of the selected terms found in the paper (0.5 when none selected)."""
+        if not values:
             return 0.5
-        matches = sum(
-            1
-            for st in profile.stress_types
-            if st.value.replace("_", " ") in text
-        )
-        return min(matches / len(profile.stress_types), 1.0)
-
-    def _score_method(
-        self,
-        paper: PaperMetadata,
-        profile: ResearcherProfile,
-    ) -> float:
-        text = f"{paper.title} {paper.abstract}".lower()
-        if not profile.phenotyping_methods:
-            return 0.5
-        matches = sum(
-            1
-            for m in profile.phenotyping_methods
-            if m.value.replace("_", " ") in text
-        )
-        return min(matches / len(profile.phenotyping_methods), 1.0)
+        matches = sum(1 for v in values if term_text(v).lower() in text)
+        return min(matches / len(values), 1.0)
 
     def _score_recency(self, paper: PaperMetadata) -> float:
         if not paper.published_date:
@@ -153,9 +110,9 @@ class PaperScorer:
     def _score_credibility(self, paper: PaperMetadata) -> float:
         score = 0.3  # baseline
         journal = (paper.journal or "").lower()
-        if journal in self.HIGH_IMPACT_JOURNALS:
+        if journal in self.domain.high_impact_journals:
             score += 0.4
-        elif journal in self.MID_IMPACT_JOURNALS:
+        elif journal in self.domain.mid_impact_journals:
             score += 0.2
         if paper.is_open_access:
             score += 0.1
@@ -185,17 +142,13 @@ class PaperScorer:
     # ── Credibility assessment ─────────────────────────
 
     def _assess_credibility(self, paper: PaperMetadata) -> CredibilityLevel:
-        if paper.source == SourceType.BIORXIV:
+        source = self.domain.sources.get(paper.source)
+        if source is not None and source.preprint:
             return CredibilityLevel.PRELIMINARY
         journal = (paper.journal or "").lower()
-        high_journal = (
-            journal in self.HIGH_IMPACT_JOURNALS
-            or paper.source in self._HIGH_IMPACT_SOURCES
-        )
-        mid_journal = (
-            journal in self.MID_IMPACT_JOURNALS
-            or paper.source in self._MID_IMPACT_SOURCES
-        )
+        impact = source.impact if source is not None else None
+        high_journal = journal in self.domain.high_impact_journals or impact == "high"
+        mid_journal = journal in self.domain.mid_impact_journals or impact == "mid"
         if high_journal and paper.citation_count > 5:
             return CredibilityLevel.HIGH
         if high_journal or (mid_journal and paper.citation_count > 5):
@@ -211,41 +164,22 @@ class PaperScorer:
         paper: PaperMetadata,
         profile: ResearcherProfile,
     ) -> list[str]:
-        """Suggest stress/method combinations based on paper content.
+        """Suggest combinations based on paper content.
 
-        Identifies intersections between what the paper describes and
-        what the researcher's profile targets that could yield novel
-        experimental designs.
+        For each facet with hint terms, a term the paper mentions but the
+        researcher did not select produces the facet's hint sentence.
         """
         suggestions: list[str] = []
         text = f"{paper.title} {paper.abstract}".lower()
 
-        # Find stresses mentioned in paper but NOT in researcher's focus
-        all_stresses = ["drought", "nutrient", "temperature", "pathogen",
-                        "heavy metal", "salinity", "light", "flooding"]
-        researcher_stresses = {
-            s.value.replace("_", " ") for s in profile.stress_types
-        }
-        for stress in all_stresses:
-            if stress in text and stress not in researcher_stresses:
-                suggestions.append(
-                    f"Paper explores {stress} stress — consider combining "
-                    f"with your {', '.join(researcher_stresses)} focus"
-                )
-
-        # Find methods mentioned that researcher doesn't use
-        all_methods = [
-            "hyperspectral", "thermal", "fluorescence", "root imaging",
-            "lidar", "multispectral", "gas exchange",
-        ]
-        researcher_methods = {
-            m.value.replace("_", " ") for m in profile.phenotyping_methods
-        }
-        for method in all_methods:
-            if method in text and method not in researcher_methods:
-                suggestions.append(
-                    f"Paper uses {method} — could complement your "
-                    f"{', '.join(researcher_methods)} approach"
-                )
+        for facet in self.domain.facets:
+            if not facet.hint_terms:
+                continue
+            selected = {term_text(v) for v in profile.terms(facet.key)}
+            for term in facet.hint_terms:
+                if term in text and term not in selected:
+                    suggestions.append(
+                        facet.hint_template.format(term=term, selected=", ".join(selected))
+                    )
 
         return suggestions[:5]

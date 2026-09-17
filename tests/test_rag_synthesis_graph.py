@@ -44,9 +44,7 @@ def _make_agent():
 def _make_state(**overrides) -> dict:
     base = {
         "profile": {
-            "species": ["poplar"],
-            "stresses": ["drought"],
-            "methods": ["imaging"],
+            "facets": {"material": ["graphite"], "property": ["capacity_fade"]},
             "keywords": [],
         },
         "initial_papers": [{"paper_id": "p1", "document": "Abstract of paper 1."}],
@@ -351,7 +349,7 @@ async def test_graph_terminates_on_done_true_after_one_iteration():
         patch.object(agent, "_identify_gaps_node", new=_mock_identify_gaps),
     ):
         final = await agent._run_synthesis_graph(
-            profile={"species": ["poplar"], "stresses": ["drought"], "methods": [], "keywords": []},
+            profile={"facets": {"material": ["graphite"]}, "keywords": []},
             initial_papers=[{"paper_id": "p1", "document": "A1"}],
             liked_proposals=[],
             researcher_id="r1",
@@ -400,7 +398,7 @@ async def test_graph_terminates_on_max_iterations_cap():
         patch.object(agent, "_retrieve_node", new=_mock_retrieve),
     ):
         await agent._run_synthesis_graph(
-            profile={"species": ["poplar"], "stresses": ["drought"], "methods": [], "keywords": []},
+            profile={"facets": {"material": ["graphite"]}, "keywords": []},
             initial_papers=[{"paper_id": "p1", "document": "A1"}],
             liked_proposals=[],
             researcher_id="r1",
@@ -447,7 +445,7 @@ async def test_graph_terminates_on_zero_new_papers_from_retrieve():
         patch.object(agent, "_retrieve_node", new=_mock_retrieve),
     ):
         final = await agent._run_synthesis_graph(
-            profile={"species": ["poplar"], "stresses": ["drought"], "methods": [], "keywords": []},
+            profile={"facets": {"material": ["graphite"]}, "keywords": []},
             initial_papers=[{"paper_id": "p1", "document": "A1"}],
             liked_proposals=[],
             researcher_id="r1",
@@ -484,9 +482,7 @@ async def test_max_iterations_zero_skips_run_synthesis_graph():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=[],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=0,
         )
 
@@ -512,9 +508,7 @@ async def test_max_iterations_zero_produces_enriched_proposals():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=[],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=0,
             with_critique=False,
         )
@@ -590,9 +584,7 @@ async def test_integration_final_proposals_reference_both_initial_and_additional
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=[],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=3,
         )
 
@@ -630,9 +622,7 @@ async def test_integration_verification_attached_on_iterative_path():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=[],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=3,
             with_critique=False,
         )
@@ -674,9 +664,7 @@ async def test_integration_critique_attached_on_iterative_path_when_requested():
     ):
         result = await agent.synthesize_combinations(
             researcher_id="r1",
-            species=["poplar"],
-            stresses=["drought"],
-            methods=[],
+            facets={"material": ["graphite"], "property": ["capacity_fade"]},
             max_iterations=3,
             with_critique=True,
         )

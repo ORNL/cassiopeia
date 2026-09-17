@@ -22,6 +22,7 @@ dependencies = [
     "langchain-community>=0.3",
     "chromadb[default]>=0.4",
     "cryptography>=41",
+    "pyyaml>=6.0",
 ]
 
 [project.scripts]
@@ -50,12 +51,16 @@ all = [
 [tool.setuptools.packages.find]
 exclude = ["main*"]
 
+[tool.setuptools.package-data]
+domains = ["*/domain.yaml"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 88
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests", "domains"]
 markers = [
     "integration: live network tests — skip with -m 'not integration'",
 ]

@@ -12,12 +12,9 @@ import pytest
 from models.schemas import (
     CredibilityLevel,
     PaperMetadata,
-    PhenotypingMethod,
     RelevanceScore,
     ResearcherProfile,
     ScoredPaper,
-    SourceType,
-    StressType,
 )
 from utils.persistence import PaperStore
 
@@ -37,10 +34,12 @@ def _profile(rid: str = "r1") -> ResearcherProfile:
     return ResearcherProfile(
         researcher_id=rid,
         name="Dr. Test",
-        plant_species=["poplar"],
-        stress_types=[StressType.DROUGHT],
-        phenotyping_methods=[PhenotypingMethod.HYPERSPECTRAL],
-        expertise_keywords=["ABA", "stomata"],
+        facets={
+            "material": ["graphite"],
+            "property": ["capacity_fade"],
+            "technique": ["dft"],
+        },
+        expertise_keywords=["SEI", "cycling"],
         time_range_months=12,
     )
 
@@ -48,10 +47,10 @@ def _profile(rid: str = "r1") -> ResearcherProfile:
 def _scored_paper(paper_id: str = "p1", doi: str | None = "10.1234/test") -> ScoredPaper:
     paper = PaperMetadata(
         paper_id=paper_id,
-        title="Drought response in poplar",
+        title="Capacity fade in graphite anodes",
         authors=["Smith J", "Jones K"],
-        abstract="Poplar shows strong ABA signaling under drought.",
-        source=SourceType.PUBMED,
+        abstract="Graphite anodes lose capacity through SEI growth.",
+        source="flagship",
         doi=doi,
         published_date=datetime(2025, 3, 1),
         journal="Plant Physiology",
@@ -60,9 +59,7 @@ def _scored_paper(paper_id: str = "p1", doi: str | None = "10.1234/test") -> Sco
     )
     relevance = RelevanceScore(
         overall=0.8,
-        species_match=1.0,
-        stress_match=1.0,
-        method_match=0.5,
+        facet_scores={"material": 1.0, "property": 1.0, "technique": 0.5},
         recency=0.8,
         credibility=0.7,
         novelty=0.6,
@@ -71,8 +68,8 @@ def _scored_paper(paper_id: str = "p1", doi: str | None = "10.1234/test") -> Sco
         paper=paper,
         relevance=relevance,
         credibility=CredibilityLevel.MODERATE,
-        suggested_combinations=["Combine drought + imaging"],
-        source_queries=["poplar drought"],
+        suggested_combinations=["Combine cycling + XRD"],
+        source_queries=["graphite capacity fade"],
     )
 
 
@@ -87,10 +84,12 @@ def test_save_and_load_profile_round_trip(store):
     assert len(loaded) == 1
     lp = loaded[0]
     assert lp.researcher_id == "r1"
-    assert lp.plant_species == ["poplar"]
-    assert lp.stress_types == [StressType.DROUGHT]
-    assert lp.phenotyping_methods == [PhenotypingMethod.HYPERSPECTRAL]
-    assert lp.expertise_keywords == ["ABA", "stomata"]
+    assert lp.facets == {
+        "material": ["graphite"],
+        "property": ["capacity_fade"],
+        "technique": ["dft"],
+    }
+    assert lp.expertise_keywords == ["SEI", "cycling"]
 
 
 def test_load_profile_returns_none_for_unknown(store):
@@ -100,12 +99,12 @@ def test_load_profile_returns_none_for_unknown(store):
 def test_save_profile_overwrites_on_duplicate(store):
     p = _profile()
     store.save_profile(p)
-    p2 = ResearcherProfile(researcher_id="r1", name="Dr. Updated", plant_species=["maize"])
+    p2 = ResearcherProfile(researcher_id="r1", name="Dr. Updated", facets={"material": ["silicon"]})
     store.save_profile(p2)
     loaded = store.load_profiles()
     assert len(loaded) == 1
     assert loaded[0].name == "Dr. Updated"
-    assert loaded[0].plant_species == ["maize"]
+    assert loaded[0].facets["material"] == ["silicon"]
 
 
 # ---------------------------------------------------------------------------
@@ -119,11 +118,12 @@ def test_save_and_load_paper_round_trip(store):
     assert len(papers) == 1
     p = papers[0]
     assert p.paper.paper_id == "p1"
-    assert p.paper.title == "Drought response in poplar"
+    assert p.paper.title == "Capacity fade in graphite anodes"
     assert p.paper.doi == "10.1234/test"
-    assert p.relevance.species_match == pytest.approx(1.0)
+    assert p.relevance.facet_scores["material"] == pytest.approx(1.0)
+    assert p.paper.source == "flagship"
     assert p.credibility == CredibilityLevel.MODERATE
-    assert "Combine drought + imaging" in p.suggested_combinations
+    assert "Combine cycling + XRD" in p.suggested_combinations
 
 
 def test_save_paper_preserves_rag_indexed_flag(store):
@@ -227,3 +227,57 @@ def test_mark_indexed_removes_from_unindexed(store):
     store.mark_indexed(["p1"])
     unindexed = store.get_unindexed_papers()
     assert all(row[0] != "p1" for row in unindexed)
+
+
+# ---------------------------------------------------------------------------
+# Migration of pre-domain-pack rows
+# ---------------------------------------------------------------------------
+
+def test_legacy_rows_are_moved_into_facets(tmp_path):
+    """Rows written before domain packs are rewritten with the pack's legacy map."""
+    import json
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    PaperStore(db).close()
+    conn = sqlite3.connect(db)
+    conn.execute("PRAGMA user_version = 0")
+    conn.execute(
+        "INSERT INTO profiles (researcher_id, data) VALUES (?, ?)",
+        ("r1", json.dumps({"researcher_id": "r1", "name": "Old", "chemistries": ["graphite"]})),
+    )
+    conn.execute(
+        "INSERT INTO papers (paper_id, data) VALUES (?, ?)",
+        ("p1", json.dumps({"paper_id": "p1", "title": "T", "source": "preprints"})),
+    )
+    conn.execute(
+        "INSERT INTO user_papers (researcher_id, paper_id, relevance) VALUES (?, ?, ?)",
+        ("r1", "p1", json.dumps({"overall": 0.4, "chemistry_match": 0.9})),
+    )
+    conn.execute(
+        "INSERT INTO llm_cache (paper_id, data) VALUES (?, ?)",
+        ("p1", json.dumps({"chemistry_match": 0.9, "hypothesis": "h"})),
+    )
+    conn.commit()
+    conn.close()
+
+    store = PaperStore(db)
+    try:
+        [profile] = store.load_profiles()
+        assert profile.facets["material"] == ["graphite"]
+        [paper] = store.load_papers("r1")
+        assert paper.relevance.facet_scores == {"material": 0.9}
+        assert store.load_llm_cache()["p1"] == {"facet_scores": {"material": 0.9}, "hypothesis": "h"}
+    finally:
+        store.close()
+
+    # Recorded so the rewrite does not run on every start.
+    conn = sqlite3.connect(db)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    conn.close()
+
+
+def test_migration_leaves_new_rows_untouched(store):
+    store.save_profile(_profile())
+    store._migrate_to_facets()
+    assert store.load_profiles()[0].facets["material"] == ["graphite"]

@@ -21,6 +21,7 @@ from utils.chunker import (
     CHUNK_OVERLAP_TOKENS,
     SECTION_PRIORITY,
 )
+from utils.source_fetchers import get_fetcher
 
 _integration = pytest.mark.integration
 
@@ -130,7 +131,7 @@ async def test_fetch_and_chunk_uses_structured_for_pmc():
     mock_fetcher.fetch_full_text_structured = AsyncMock(return_value=_SECTIONS)
     mock_fetcher.fetch_full_text = AsyncMock(return_value=None)
 
-    chunks = await fetch_and_chunk_paper("PMC123", "pubmed", mock_fetcher)
+    chunks = await fetch_and_chunk_paper("PMC123", mock_fetcher)
 
     mock_fetcher.fetch_full_text_structured.assert_called_once_with("PMC123")
     assert chunks is not None and len(chunks) > 0
@@ -142,9 +143,22 @@ async def test_fetch_and_chunk_returns_none_when_no_full_text():
     mock_fetcher = AsyncMock()
     mock_fetcher.fetch_full_text_structured = AsyncMock(return_value=None)
 
-    chunks = await fetch_and_chunk_paper("PMC999", "pubmed", mock_fetcher)
+    chunks = await fetch_and_chunk_paper("PMC999", mock_fetcher)
 
     assert chunks is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_and_chunk_uses_plain_text_without_structured_support():
+    """Fetchers without sectioned text are chunked from plain full text."""
+    mock_fetcher = MagicMock(spec=["fetch_full_text"])
+    mock_fetcher.fetch_full_text = AsyncMock(return_value=" ".join(["word"] * 400))
+
+    chunks = await fetch_and_chunk_paper("2401.00001", mock_fetcher)
+
+    mock_fetcher.fetch_full_text.assert_called_once_with("2401.00001")
+    assert chunks
+    assert {c["section"] for c in chunks} == {"other"}
 
 
 # ── fetch_full_text_structured (mocked HTTP) ──────────────────────────────────
@@ -192,8 +206,7 @@ def _mock_epmc_session(xml_text: str, status: int = 200):
 
 @pytest.mark.asyncio
 async def test_structured_fetch_returns_section_dict():
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     with patch("utils.source_fetchers._session", return_value=_mock_epmc_session(_PMC_XML)):
         result = await fetcher.fetch_full_text_structured("PMC1234567")
     assert result is not None
@@ -203,8 +216,7 @@ async def test_structured_fetch_returns_section_dict():
 
 @pytest.mark.asyncio
 async def test_structured_fetch_drops_references():
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     with patch("utils.source_fetchers._session", return_value=_mock_epmc_session(_PMC_XML)):
         result = await fetcher.fetch_full_text_structured("PMC1234567")
     assert result is not None
@@ -214,8 +226,7 @@ async def test_structured_fetch_drops_references():
 
 @pytest.mark.asyncio
 async def test_structured_fetch_maps_intro_label():
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     with patch("utils.source_fetchers._session", return_value=_mock_epmc_session(_PMC_XML)):
         result = await fetcher.fetch_full_text_structured("PMC1234567")
     assert result is not None
@@ -224,16 +235,14 @@ async def test_structured_fetch_maps_intro_label():
 
 @pytest.mark.asyncio
 async def test_structured_fetch_returns_none_for_non_pmc():
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     result = await fetcher.fetch_full_text_structured("PPR123456")
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_structured_fetch_returns_none_on_http_error():
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     with patch("utils.source_fetchers._session",
                return_value=_mock_epmc_session("", status=404)):
         result = await fetcher.fetch_full_text_structured("PMC1234567")
@@ -254,8 +263,7 @@ _FLAT_XML = """\
 @pytest.mark.asyncio
 async def test_structured_fetch_flat_xml_fallback():
     """Flat XML (no <sec> elements) must return {"other": text}."""
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     with patch("utils.source_fetchers._session", return_value=_mock_epmc_session(_FLAT_XML)):
         result = await fetcher.fetch_full_text_structured("PMC9999999")
     assert result is not None
@@ -365,8 +373,7 @@ def test_get_papers_needing_chunking(tmp_path):
 @pytest.mark.asyncio
 async def test_fetch_full_text_structured_real_pmc():
     """PMC7468712 is an open-access Arabidopsis paper — must return section dict."""
-    from utils.source_fetchers import PubMedFetcher
-    fetcher = PubMedFetcher()
+    fetcher = get_fetcher("flagship")
     result = await fetcher.fetch_full_text_structured("PMC7468712")
     assert result is not None, "Expected structured sections for an OA PMC paper"
     assert isinstance(result, dict)
@@ -378,10 +385,8 @@ async def test_fetch_full_text_structured_real_pmc():
 @pytest.mark.asyncio
 async def test_fetch_and_chunk_real_pmc():
     """End-to-end: fetch + chunk a real PMC paper. Chunks must be non-empty and unique."""
-    from utils.source_fetchers import PubMedFetcher
-    from utils.chunker import fetch_and_chunk_paper
-    fetcher = PubMedFetcher()
-    chunks = await fetch_and_chunk_paper("PMC7468712", "pubmed", fetcher)
+    fetcher = get_fetcher("flagship")
+    chunks = await fetch_and_chunk_paper("PMC7468712", fetcher)
     if chunks is None:
         pytest.skip("Full text not available for this paper (paywalled or fetch failed)")
     assert len(chunks) > 0
@@ -396,7 +401,6 @@ async def test_fetch_and_chunk_real_pmc():
 @pytest.mark.asyncio
 async def test_structured_fetch_non_pmc_returns_none():
     """A preprint with no PMC ID must return None without raising."""
-    from utils.source_fetchers import BioRxivFetcher
-    fetcher = BioRxivFetcher()
+    fetcher = get_fetcher("preprints")
     result = await fetcher.fetch_full_text_structured("PPR9999999")
     assert result is None

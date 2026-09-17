@@ -11,16 +11,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from domains import current_domain
 from models.schemas import (
     CredibilityLevel,
     PaperMetadata,
     RelevanceScore,
     ResearcherProfile,
     ScoredPaper,
-    SourceType,
-    StressType,
-    PhenotypingMethod,
 )
+
+# PRAGMA user_version values
+_SCHEMA_FACETS = 1  # profiles/scores stored as facet dicts (domain packs)
 
 
 _DEFAULT_DB = Path(__file__).parent.parent / "cassiopeia.db"
@@ -166,6 +167,60 @@ class PaperStore:
             self._conn.execute("ALTER TABLE sessions ADD COLUMN proposals_snap TEXT")
             self._conn.commit()
 
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version < _SCHEMA_FACETS:
+            self._migrate_to_facets()
+            self._conn.execute(f"PRAGMA user_version = {_SCHEMA_FACETS}")
+            self._conn.commit()
+
+    def _migrate_to_facets(self) -> None:
+        """Rewrite JSON written before domain packs, using the pack's ``legacy`` map.
+
+        Profiles and session snapshots move named profile fields into
+        ``facets``/``context``; scores and the LLM cache move named score
+        fields into ``facet_scores``.  Rows already in the new shape are left
+        alone, so the migration is safe to interrupt and rerun.
+        """
+        legacy = current_domain().legacy
+        facet_map = legacy.get("facets", {})
+        context_map = legacy.get("context", {})
+        score_map = legacy.get("scores", {})
+
+        def profile(d: dict) -> dict:
+            if "facets" in d:
+                return d
+            d["facets"] = {new: d.pop(old) for old, new in facet_map.items() if old in d}
+            ctx = {new: d.pop(old) for old, new in context_map.items() if old in d}
+            if ctx:
+                d["context"] = ctx
+            return d
+
+        def scores(d: dict) -> dict:
+            if "facet_scores" in d:
+                return d
+            d["facet_scores"] = {new: d.pop(old) for old, new in score_map.items() if old in d}
+            return d
+
+        rewrites = (
+            ("profiles", "researcher_id", "data", profile),
+            ("sessions", "session_id", "profile_snap", profile),
+            ("llm_cache", "paper_id", "data", scores),
+        )
+        for table, key, column, convert in rewrites:
+            rows = self._conn.execute(f"SELECT {key}, {column} FROM {table}").fetchall()
+            self._conn.executemany(
+                f"UPDATE {table} SET {column} = ? WHERE {key} = ?",
+                [(json.dumps(convert(json.loads(r[column]))), r[key]) for r in rows],
+            )
+        rows = self._conn.execute(
+            "SELECT researcher_id, paper_id, relevance FROM user_papers"
+        ).fetchall()
+        self._conn.executemany(
+            "UPDATE user_papers SET relevance = ? WHERE researcher_id = ? AND paper_id = ?",
+            [(json.dumps(scores(json.loads(r["relevance"]))), r["researcher_id"], r["paper_id"])
+             for r in rows],
+        )
+
     # ------------------------------------------------------------------
     # Profiles
     # ------------------------------------------------------------------
@@ -174,15 +229,13 @@ class PaperStore:
         data = {
             "researcher_id": profile.researcher_id,
             "name": profile.name,
-            "plant_species": profile.plant_species,
-            "stress_types": [s.value for s in profile.stress_types],
-            "phenotyping_methods": [m.value for m in profile.phenotyping_methods],
+            "facets": profile.facets,
             "expertise_keywords": profile.expertise_keywords,
             "priority_novelty": profile.priority_novelty,
             "priority_relevance": profile.priority_relevance,
             "priority_methodology": profile.priority_methodology,
             "priority_reproducibility": profile.priority_reproducibility,
-            "available_equipment": profile.available_equipment,
+            "context": profile.context,
             "time_range_months": profile.time_range_months,
             "source_targets": profile.source_targets,
         }
@@ -201,6 +254,7 @@ class PaperStore:
 
     def load_profiles(self) -> list[ResearcherProfile]:
         rows = self._conn.execute("SELECT data FROM profiles").fetchall()
+        domain = current_domain()
         profiles = []
         for row in rows:
             d = json.loads(row["data"])
@@ -208,17 +262,13 @@ class PaperStore:
                 ResearcherProfile(
                     researcher_id=d["researcher_id"],
                     name=d["name"],
-                    plant_species=d.get("plant_species", []),
-                    stress_types=[StressType(s) for s in d.get("stress_types", [])],
-                    phenotyping_methods=[
-                        PhenotypingMethod(m) for m in d.get("phenotyping_methods", [])
-                    ],
+                    facets=domain.validate_facets(d.get("facets")),
                     expertise_keywords=d.get("expertise_keywords", []),
                     priority_novelty=d.get("priority_novelty", 0.5),
                     priority_relevance=d.get("priority_relevance", 0.5),
                     priority_methodology=d.get("priority_methodology", 0.5),
                     priority_reproducibility=d.get("priority_reproducibility", 0.5),
-                    available_equipment=d.get("available_equipment", []),
+                    context=d.get("context", {}),
                     time_range_months=d.get("time_range_months", 12),
                     source_targets=d.get("source_targets", []),
                 )
@@ -259,7 +309,7 @@ class PaperStore:
             "published": pub,
             "doi": paper.doi,
             "url": paper.url,
-            "source": paper.source.value,
+            "source": paper.source,
             "keywords": paper.keywords,
             "is_open_access": paper.is_open_access,
             "citation_count": paper.citation_count,
@@ -279,9 +329,7 @@ class PaperStore:
         added_at = row["added_at"] if row else datetime.now(timezone.utc).isoformat()
         relevance = {
             "overall": scored.relevance.overall,
-            "species_match": scored.relevance.species_match,
-            "stress_match": scored.relevance.stress_match,
-            "method_match": scored.relevance.method_match,
+            "facet_scores": scored.relevance.facet_scores,
             "recency": scored.relevance.recency,
             "credibility": scored.relevance.credibility,
             "novelty": scored.relevance.novelty,
@@ -639,17 +687,12 @@ def _row_to_scored(d: dict) -> ScoredPaper:
         except ValueError:
             pub = None
 
-    try:
-        source = SourceType(d.get("source", "other"))
-    except ValueError:
-        source = SourceType.OTHER
-
     paper = PaperMetadata(
         paper_id=d["paper_id"],
         title=d.get("title", ""),
         authors=d.get("authors", []),
         abstract=d.get("abstract", ""),
-        source=source,
+        source=d.get("source", "other"),
         doi=d.get("doi"),
         url=d.get("url"),
         published_date=pub,
@@ -662,9 +705,7 @@ def _row_to_scored(d: dict) -> ScoredPaper:
     r = d.get("relevance", {})
     relevance = RelevanceScore(
         overall=r.get("overall", 0.0),
-        species_match=r.get("species_match", 0.0),
-        stress_match=r.get("stress_match", 0.0),
-        method_match=r.get("method_match", 0.0),
+        facet_scores=r.get("facet_scores", {}),
         recency=r.get("recency", 0.0),
         credibility=r.get("credibility", 0.0),
         novelty=r.get("novelty", 0.0),
