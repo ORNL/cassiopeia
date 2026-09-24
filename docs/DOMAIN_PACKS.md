@@ -31,6 +31,50 @@ evaluators; the core test suite runs against it.
 
 ---
 
+## Setup wizard
+
+```bash
+./launch.sh setup      # https://localhost:5173/setup.html — Ctrl-C when done
+```
+
+The wizard runs before launch, in place of the API server, and answers only
+requests from this machine (there is no login). It lets you:
+
+- **choose** the pack a deployment serves — it writes `DOMAIN_PACK` to `.env`;
+- **create** a pack, blank or as a copy of an installed one (its `domain.yaml`
+  only: `hooks.py` and `ui/` stay code);
+- **edit** any part of `domain.yaml` in forms, test the sources with a real
+  search, and review the exact diff before saving. Comments and the layout of
+  unchanged entries are kept;
+- **commit** `domains/<pack>/` alone to git — on the current branch, or on a
+  new `pack/<pack>` branch it creates first. Anything else you have modified
+  or staged is left alone. Pushing is up to you.
+
+### What can change once a pack has data
+
+| Free at any time | Fixed once the pack's database has profiles or papers |
+| --- | --- |
+| Labels, descriptions, prompts, UI strings | Facet `key`s and `role`s |
+| New vocabulary values, new facets | Removing a closed-vocabulary value that profiles use (set `hidden: true` instead) |
+| Sources, credibility lists, context, critique | |
+
+The wizard shows fixed fields read-only and refuses a save that breaks them.
+The same rule protects hand edits: see [Data](#data) below.
+
+## Data
+
+Each pack keeps its database and vector store in `data/<pack>/`, so switching
+`DOMAIN_PACK` never mixes corpora (`DB_PATH` and `RAG_PERSIST_DIR` override
+this; the Docker image points them at a volume). A database records the pack
+that filled it and its facet roles: Cassiopeia refuses to start on a database
+of another pack, or when a facet it uses is gone or changed role.
+
+A database from before per-pack directories (`cassiopeia.db` and `chroma_db/`
+at the project root) is moved into `data/<pack>/` the first time its pack
+starts.
+
+---
+
 ## `domain.yaml`
 
 ### Facets
@@ -211,10 +255,11 @@ the dashboard's own copies.
 
 ## Checklist for a new community
 
-1. Copy `tests/fixtures/materials_pack/` to `domains/<pack>/` and edit
-   `domain.yaml`.
-2. Set `DOMAIN_PACK=<pack>` in `.env`. Once more than one pack is installed,
-   every deployment must set it.
+1. Run `./launch.sh setup`, create the pack (or copy
+   `tests/fixtures/materials_pack/` to `domains/<pack>/` and edit
+   `domain.yaml` by hand), and test its sources.
+2. Select it (the wizard's *Use this pack*, or `DOMAIN_PACK=<pack>` in
+   `.env`). Once more than one pack is installed, every deployment must set it.
 3. Run the tests: `pytest` (core suite plus the pack's tests), and
    `pytest -m integration` to check that the sources answer.
 4. Build and start: `docker compose build && docker compose up`. The dashboard

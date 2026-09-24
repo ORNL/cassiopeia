@@ -42,6 +42,7 @@ from domains import current_domain
 from models.schemas import ResearcherProfile
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
+from utils.data_paths import default_db_path
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
@@ -96,7 +97,7 @@ async def lifespan(app: FastAPI):
     logger.info("Serving domain pack: %s", current_domain().name)
 
     scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
-    db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
+    db_path = default_db_path()
     app.state.bg_tasks: set[asyncio.Task] = set()
 
     async with launch_agents(scan_seconds, db_path) as (mining, rag, store):

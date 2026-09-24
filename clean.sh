@@ -47,7 +47,8 @@ _rm() {
     fi
 }
 
-# Databases
+# Databases: per-pack data/<pack>/, and the root location used before packs
+_rm "$SCRIPT_DIR/data"
 _rm "$SCRIPT_DIR/cassiopeia.db"
 _rm "$SCRIPT_DIR/cassiopeia.db-shm"
 _rm "$SCRIPT_DIR/cassiopeia.db-wal"

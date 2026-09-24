@@ -25,7 +25,8 @@ const hasLocalCert = existsSync(certPath) && existsSync(keyPath);
 
 // Domain pack UI. Mirrors the backend rule: DOMAIN_PACK names a directory under
 // domains/ (or a path); when unset, the only installed pack is used. A pack
-// without ui/index.jsx gets the empty plugin set.
+// without ui/index.jsx gets the empty plugin set. The setup wizard
+// (CASSIOPEIA_SETUP=1, see launch.sh) runs before any pack is chosen.
 const domainsDir = resolve(here, "../domains");
 function packDir() {
   const ref = process.env.DOMAIN_PACK?.trim();
@@ -34,12 +35,14 @@ function packDir() {
     ? readdirSync(domainsDir).filter((d) => existsSync(resolve(domainsDir, d, "domain.yaml")))
     : [];
   if (packs.length !== 1) {
+    if (process.env.CASSIOPEIA_SETUP) return null;
     throw new Error(`Set DOMAIN_PACK to one of the installed domain packs: ${packs.join(", ") || "(none found)"}`);
   }
   return resolve(domainsDir, packs[0]);
 }
-const packUiEntry = resolve(packDir(), "ui/index.jsx");
-const domainUi = existsSync(packUiEntry) ? packUiEntry : resolve(here, "src/noDomainUi.js");
+const pack = packDir();
+const packUiEntry = pack ? resolve(pack, "ui/index.jsx") : "";
+const domainUi = packUiEntry && existsSync(packUiEntry) ? packUiEntry : resolve(here, "src/noDomainUi.js");
 
 export default defineConfig({
   plugins: [react(), ...(hasLocalCert ? [] : [basicSsl()])],
