@@ -33,7 +33,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from academy.logging import init_logging
+from academy.logging.recommended import recommended_logging
 
 from api.auth import router as auth_router
 from api.settings import router as settings_router
@@ -46,7 +46,7 @@ from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
 from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
-init_logging(logging.INFO)
+recommended_logging(logging.INFO).init_logging()
 logger = logging.getLogger(__name__)
 
 # Silence noisy third-party loggers

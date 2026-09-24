@@ -40,13 +40,13 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
-from academy.logging import init_logging
+from academy.logging.recommended import recommended_logging
 
 from domains import current_domain
 from utils.agent_bridge import _call, launch_agents
 from utils.persistence import PaperStore
 
-init_logging(logging.INFO)
+recommended_logging(logging.INFO).init_logging()
 logger = logging.getLogger(__name__)
 
 # ── Global state (populated in lifespan) ─────────────────────────────────────

@@ -452,13 +452,21 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             **llm_r,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=4000,
+            max_tokens=8000,
             response_format={"type": "json_object"},
             temperature=0.4,
             timeout=180,
         )
-        raw = response.choices[0].message.content.strip()
-        return parse_json_response(raw).get("proposals", [])
+        choice = response.choices[0]
+        raw = (choice.message.content or "").strip()
+        try:
+            return parse_json_response(raw).get("proposals", [])
+        except json.JSONDecodeError:
+            logger.warning(
+                "Proposal response not parseable (finish_reason=%s, %d chars): %r",
+                choice.finish_reason, len(raw), raw[:200],
+            )
+            raise
 
     def _build_paper_texts(
         self, hits: list[dict], chunk_budget: int
@@ -1123,15 +1131,22 @@ class RAGAgent(Agent):
                     n=len(hits),
                     context=context,
                 )}],
-                max_tokens=1200,
+                max_tokens=2500,
                 response_format={"type": "json_object"},
                 temperature=0.2,
                 timeout=150,
             )
-            raw = response.choices[0].message.content.strip()
+            choice = response.choices[0]
+            raw = (choice.message.content or "").strip()
             contradictions = parse_json_response(raw).get("contradictions", [])
-        except (litellm.APIError, json.JSONDecodeError) as exc:
+        except litellm.APIError as exc:
             logger.warning("detect_contradictions pass '%s' failed: %s", query, exc)
+            return []
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "detect_contradictions pass '%s' failed: %s (finish_reason=%s, %d chars): %r",
+                query, exc, choice.finish_reason, len(raw), raw[:200],
+            )
             return []
 
         # Replace the raw paper_id list with full metadata for the frontend.

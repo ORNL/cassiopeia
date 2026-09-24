@@ -35,15 +35,19 @@ def parse_json_response(raw: str) -> object:
         ```json\\n{...}\\n```
         ```\\n{...}\\n```
         {...}   (no fence)
+        prose before/after the JSON (Claude often explains itself first)
 
-    Raises json.JSONDecodeError if the content is not valid JSON after stripping.
+    Raises json.JSONDecodeError if no valid JSON value can be found.
     """
-    text = raw.strip()
-    if text.startswith("```"):
-        # Remove opening fence line (```json, ```, etc.)
-        text = _FENCE_RE.sub("", text, count=1)
-        # Remove closing fence if present
-        if text.endswith("```"):
-            text = text[: text.rfind("```")]
-        text = text.strip()
-    return json.loads(text)
+    text = strip_json_fence(raw)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        # Fall back to the first JSON object/array embedded in the response.
+        decoder = json.JSONDecoder()
+        for match in re.finditer(r"[{\[]", text):
+            try:
+                return decoder.raw_decode(text, match.start())[0]
+            except json.JSONDecodeError:
+                continue
+        raise exc

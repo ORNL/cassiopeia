@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Context-Aware Semantic Search for Inspiring Original Plant Experiments and Investigations at APPL"
 requires-python = ">=3.11"
 dependencies = [
-    "academy-py>=0.2",
+    "academy-py>=1.0",
     "aiohttp>=3.9",
     "pydantic>=2.0",
     "fastapi>=0.111",
