@@ -1,10 +1,14 @@
 mirror-to-github:
-  stage: .post
+  stage: deploy
+  tags: [mirror-to-github]
   image: alpine/git:latest
   variables:
     GIT_STRATEGY: clone
-    GIT_DEPTH: 0          # full history needed for --mirror
+    GIT_DEPTH: 0          # full history needed to mirror
   script:
-    - git push --mirror "https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/ORNL/cassiopeia.git"
+    - git fetch origin '+refs/heads/*:refs/remotes/origin/*' --tags
+    - git remote set-head origin -d || true
+    - git push --prune "https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/ORNL/cassiopeia.git"
+        '+refs/remotes/origin/*:refs/heads/*' '+refs/tags/*:refs/tags/*'
   rules:
     - if: $CI_PIPELINE_SOURCE == "push"
