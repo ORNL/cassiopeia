@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from domains import current_domain
+from domains import DomainPackError, current_domain
+from utils.data_paths import default_db_path
 from models.schemas import (
     CredibilityLevel,
     PaperMetadata,
@@ -24,14 +25,12 @@ from models.schemas import (
 _SCHEMA_FACETS = 1  # profiles/scores stored as facet dicts (domain packs)
 
 
-_DEFAULT_DB = Path(__file__).parent.parent / "cassiopeia.db"
-
 
 class PaperStore:
     """Thread-safe SQLite store for profiles, papers, and LLM score cache."""
 
-    def __init__(self, db_path: str | Path = _DEFAULT_DB) -> None:
-        self._path = Path(db_path)
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self._path = Path(db_path or default_db_path())
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(
             str(self._path),
@@ -148,10 +147,58 @@ class PaperStore:
             );
             CREATE INDEX IF NOT EXISTS idx_contradictions_researcher
                 ON contradictions (researcher_id, detected_at);
+
+            -- Which domain pack filled this database (see _check_domain).
+            CREATE TABLE IF NOT EXISTS deployment (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             """
         )
         self._conn.commit()
+        self._check_domain()
         self._migrate()
+
+    def _check_domain(self) -> None:
+        """Refuse to open a database that another domain pack filled.
+
+        The first open records the active pack's name and its facet roles.
+        Later opens must use the same pack, and every recorded facet must still
+        exist with the same role: profiles and scores are keyed by facet.  New
+        facets are allowed and get recorded.
+        """
+        domain = current_domain()
+        facets = {f.key: f.role for f in domain.facets}
+        stamp = dict(self._conn.execute("SELECT key, value FROM deployment").fetchall())
+        if "domain_pack" in stamp:
+            owner = stamp["domain_pack"]
+            if owner != domain.name:
+                self._conn.close()
+                raise DomainPackError(
+                    f"Database {self._path} belongs to domain pack {owner!r}, but "
+                    f"{domain.name!r} is active. Select {owner!r} or use another DB_PATH."
+                )
+            recorded = json.loads(stamp.get("facets", "{}"))
+            broken = [
+                f"{key} ({role})" for key, role in recorded.items()
+                if facets.get(key) != role
+            ]
+            if broken:
+                self._conn.close()
+                raise DomainPackError(
+                    f"Domain pack {domain.name!r} no longer declares facet(s) "
+                    f"{', '.join(broken)} that the data in {self._path} uses. "
+                    "Restore them in domain.yaml (facet keys and roles cannot change "
+                    "once a deployment has data)."
+                )
+            if recorded == facets:
+                return
+            facets = {**recorded, **facets}
+        self._conn.executemany(
+            "INSERT OR REPLACE INTO deployment (key, value) VALUES (?, ?)",
+            [("domain_pack", domain.name), ("facets", json.dumps(facets))],
+        )
+        self._conn.commit()
 
     def _migrate(self) -> None:
         """Apply forward-compatible schema migrations for existing databases.

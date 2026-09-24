@@ -121,7 +121,7 @@ Open `.env` in a text editor and fill in at minimum:
 
 - **`ANTHROPIC_API_KEY`** (or whichever provider you use)
 - **`LLM_SCORING_MODEL`** and **`LLM_CHAT_MODEL`** — already set to sensible defaults
-- **`DOMAIN_PACK`** — the community this deployment serves (default: the only installed pack, `plant_phenotyping`)
+- **`DOMAIN_PACK`** — the community this deployment serves (default: the only installed pack, `plant_phenotyping`). `./launch.sh setup` opens a wizard to choose, create or edit packs; see [docs/DOMAIN_PACKS.md](docs/DOMAIN_PACKS.md#setup-wizard)
 - **`FACILITY_EQUIPMENT`** — comma-separated list of instruments at your facility
 
 Everything else can be left at its default value for a first run.
@@ -147,6 +147,13 @@ Stop everything with:
 
 ```bash
 ./launch.sh stop
+```
+
+To choose, create or edit the domain pack, stop Cassiopeia and run the setup
+wizard (Ctrl-C to quit it):
+
+```bash
+./launch.sh setup
 ```
 
 ---

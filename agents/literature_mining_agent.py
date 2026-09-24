@@ -19,7 +19,6 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from academy.agent import Agent, action, loop
@@ -33,6 +32,7 @@ from models.schemas import (
     ScoredPaper,
     SearchQuery,
 )
+from utils.data_paths import default_db_path
 from utils.llm_scorer import LLMPaperScorer
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
@@ -77,7 +77,7 @@ class LiteratureMiningAgent(Agent):
         self.max_papers_per_query = max_papers_per_query
 
         # Persistent storage
-        _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
+        _db = db_path or default_db_path()
         self.store = PaperStore(_db)
 
         # Restore state from SQLite

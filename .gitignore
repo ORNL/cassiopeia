@@ -10,7 +10,8 @@ venv/
 .env
 .env.local
 
-# Runtime data
+# Runtime data (one directory per domain pack)
+data/
 *.db
 *.db-shm
 *.db-wal

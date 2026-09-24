@@ -23,8 +23,6 @@ import asyncio
 import hashlib
 import json
 import logging
-import os
-from pathlib import Path
 from typing import Any, TypedDict
 
 import litellm
@@ -34,6 +32,7 @@ litellm.drop_params = True
 from academy.agent import Agent, action
 
 from domains import DomainPack, current_domain, term_text
+from utils.data_paths import default_db_path, default_rag_dir
 from utils.json_utils import parse_json_response
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
@@ -246,8 +245,8 @@ class RAGAgent(Agent):
     ) -> None:
         super().__init__()
 
-        _db = db_path or os.environ.get("DB_PATH") or str(Path(__file__).parent.parent / "cassiopeia.db")
-        _rag_dir = rag_persist_dir or os.environ.get("RAG_PERSIST_DIR") or str(Path(__file__).parent.parent / "chroma_db")
+        _db = db_path or default_db_path()
+        _rag_dir = rag_persist_dir or default_rag_dir()
 
         self._store = PaperStore(_db)
         self._rag = RAGStore(persist_dir=_rag_dir)

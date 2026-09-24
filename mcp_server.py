@@ -44,6 +44,7 @@ from academy.logging.recommended import recommended_logging
 
 from domains import current_domain
 from utils.agent_bridge import _call, launch_agents
+from utils.data_paths import default_db_path
 from utils.persistence import PaperStore
 
 recommended_logging(logging.INFO).init_logging()
@@ -83,7 +84,7 @@ async def _lifespan(app: Any):  # app is the FastMCP ASGI app
     global _mining_handle, _rag_handle, _paper_store
 
     scan_seconds = int(float(os.environ.get("SCAN_INTERVAL_HOURS", "24")) * 3600)
-    db_path = os.environ.get("DB_PATH") or str(Path(_PROJECT_ROOT) / "cassiopeia.db")
+    db_path = default_db_path()
 
     async with launch_agents(scan_seconds, db_path) as (mining, rag, store):
         _mining_handle, _rag_handle, _paper_store = mining, rag, store

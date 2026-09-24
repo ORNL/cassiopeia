@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 from dataclasses import dataclass, field
 from functools import cached_property
 from pathlib import Path
@@ -379,16 +380,47 @@ def _pack_root(ref: str | os.PathLike) -> Path:
     return root
 
 
-def _check(name: str, facets: tuple[Facet, ...], sources: dict[str, SourceInfo]) -> None:
+_KEY_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _duplicates(values) -> list[str]:
+    seen: set[str] = set()
+    return sorted({v for v in values if v in seen or seen.add(v)})
+
+
+def _check(name: str, facets: tuple[Facet, ...], sources: dict[str, SourceInfo],
+           raw_sources: list) -> None:
     if not facets:
         raise DomainPackError(f"Domain pack {name!r} declares no facets")
+    for f in facets:
+        if not _KEY_RE.match(f.key):
+            raise DomainPackError(
+                f"Facet key {f.key!r} must be lower-case letters, digits and underscores"
+            )
     unknown = [f.key for f in facets if f.role not in ROLE_PRIORITY]
     if unknown:
         raise DomainPackError(f"Facet {unknown[0]!r} has unknown role")
+    dup = _duplicates(f.key for f in facets)
+    if dup:
+        raise DomainPackError(f"Duplicate facet key {dup[0]!r}")
+    for f in facets:
+        if any(not v.value for v in f.vocabulary):
+            raise DomainPackError(f"Facet {f.key!r} has a vocabulary entry without a value")
+        dup = _duplicates(v.value for v in f.vocabulary)
+        if dup:
+            raise DomainPackError(f"Facet {f.key!r} lists value {dup[0]!r} twice")
     if not any(f.in_queries for f in facets):
         raise DomainPackError(f"Domain pack {name!r} needs at least one subject or condition facet")
     if not sources:
         raise DomainPackError(f"Domain pack {name!r} declares no sources")
+    bad = [s.key for s in sources.values() if not _KEY_RE.match(s.key or "")]
+    if bad:
+        raise DomainPackError(
+            f"Source key {bad[0]!r} must be lower-case letters, digits and underscores"
+        )
+    dup = _duplicates(s.get("key") for s in raw_sources)
+    if dup:
+        raise DomainPackError(f"Duplicate source key {dup[0]!r}")
 
 
 def _prompts(raw: dict) -> Prompts:
@@ -398,29 +430,57 @@ def _prompts(raw: dict) -> Prompts:
 def load_domain(ref: str | os.PathLike) -> DomainPack:
     """Load a pack from a directory name under ``domains/`` or from a path."""
     root = _pack_root(ref)
-    raw = yaml.safe_load((root / "domain.yaml").read_text(encoding="utf-8")) or {}
-    name = raw.get("name", root.name)
-    facets = tuple(_facet(f) for f in raw.get("facets") or ())
-    sources = {s.key: s for s in (_source(s) for s in raw.get("sources") or ())}
-    _check(name, facets, sources)
+    try:
+        raw = yaml.safe_load((root / "domain.yaml").read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        raise DomainPackError(f"{root / 'domain.yaml'} is not valid YAML: {exc}") from exc
+    return pack_from_dict(raw, root)
 
-    hooks = _load_hooks(root, name)
+
+def pack_from_dict(raw: dict, root: Path, *, run_hooks: bool = True) -> DomainPack:
+    """Build a pack from parsed ``domain.yaml`` content.
+
+    Malformed content raises :class:`DomainPackError`.  With ``run_hooks=False``
+    the pack's ``hooks.py`` is not imported (no evaluators, no custom backends),
+    which is how the setup wizard validates drafts.
+    """
+    if not isinstance(raw, dict):
+        raise DomainPackError("domain.yaml must be a mapping")
+    name = raw.get("name", root.name)
+    try:
+        facets = tuple(_facet(f) for f in raw.get("facets") or ())
+        raw_sources = list(raw.get("sources") or ())
+        sources = {s.key: s for s in (_source(s) for s in raw_sources)}
+        _check(name, facets, sources, raw_sources)
+        prompts = _prompts(raw.get("prompts") or {})
+        credibility = raw.get("credibility") or {}
+        critique = raw.get("critique") or {}
+        context_specs = tuple(ContextSpec(**c) for c in raw.get("context") or ())
+        critique_dimensions = tuple(
+            CritiqueDimension(**d) for d in critique.get("dimensions") or ()
+        )
+        high = frozenset(j.lower() for j in credibility.get("high_impact_journals") or ())
+        mid = frozenset(j.lower() for j in credibility.get("mid_impact_journals") or ())
+    except KeyError as exc:
+        raise DomainPackError(f"Domain pack {name!r}: missing required field {exc}") from exc
+    except (TypeError, AttributeError) as exc:
+        raise DomainPackError(f"Domain pack {name!r}: malformed entry ({exc})") from exc
+
+    hooks = _load_hooks(root, name) if run_hooks else None
     if hooks is not None and hasattr(hooks, "setup"):
         hooks.setup()
 
-    credibility = raw.get("credibility") or {}
-    critique = raw.get("critique") or {}
     return DomainPack(
         name=name,
         root=root,
         title=raw.get("title", name),
         facets=facets,
         sources=sources,
-        prompts=_prompts(raw.get("prompts") or {}),
-        high_impact_journals=frozenset(j.lower() for j in credibility.get("high_impact_journals") or ()),
-        mid_impact_journals=frozenset(j.lower() for j in credibility.get("mid_impact_journals") or ()),
-        context_specs=tuple(ContextSpec(**c) for c in raw.get("context") or ()),
-        critique_dimensions=tuple(CritiqueDimension(**d) for d in critique.get("dimensions") or ()),
+        prompts=prompts,
+        high_impact_journals=high,
+        mid_impact_journals=mid,
+        context_specs=context_specs,
+        critique_dimensions=critique_dimensions,
         evaluators=tuple(getattr(hooks, "EVALUATORS", ())),
         ui=raw.get("ui") or {},
         legacy=raw.get("legacy") or {},
@@ -434,19 +494,25 @@ def installed_packs() -> list[str]:
 _current: DomainPack | None = None
 
 
+def selected_pack_name() -> str | None:
+    """The pack named by ``DOMAIN_PACK``, else the only installed one, else None."""
+    ref = os.environ.get("DOMAIN_PACK", "").strip()
+    if ref:
+        return ref
+    packs = installed_packs()
+    return packs[0] if len(packs) == 1 else None
+
+
 def current_domain() -> DomainPack:
     """The pack this deployment serves (loaded once, from ``DOMAIN_PACK``)."""
     global _current
     if _current is None:
-        ref = os.environ.get("DOMAIN_PACK", "").strip()
-        if not ref:
-            packs = installed_packs()
-            if len(packs) != 1:
-                raise DomainPackError(
-                    "Set DOMAIN_PACK to one of the installed domain packs: "
-                    + (", ".join(packs) or "(none found)")
-                )
-            ref = packs[0]
+        ref = selected_pack_name()
+        if ref is None:
+            raise DomainPackError(
+                "Set DOMAIN_PACK to one of the installed domain packs: "
+                + (", ".join(installed_packs()) or "(none found)")
+            )
         _current = load_domain(ref)
     return _current
 

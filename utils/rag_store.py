@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any
 
@@ -13,8 +12,7 @@ import chromadb
 from chromadb.config import Settings
 from chromadb.utils.embedding_functions import DefaultEmbeddingFunction
 
-
-_DEFAULT_PERSIST = Path(__file__).parent.parent / "chroma_db"
+from utils.data_paths import default_rag_dir
 
 
 def preload_embedding_model() -> None:
@@ -36,10 +34,10 @@ class RAGStore:
 
     def __init__(
         self,
-        persist_dir: str | Path = _DEFAULT_PERSIST,
+        persist_dir: str | Path | None = None,
         collection_name: str = "papers",
     ) -> None:
-        persist_dir = Path(persist_dir)
+        persist_dir = Path(persist_dir or default_rag_dir())
         persist_dir.mkdir(parents=True, exist_ok=True)
 
         self._client = chromadb.PersistentClient(
