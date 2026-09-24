@@ -1,0 +1,10 @@
+mirror-to-github:
+  stage: .post
+  image: alpine/git:latest
+  variables:
+    GIT_STRATEGY: clone
+    GIT_DEPTH: 0          # full history needed for --mirror
+  script:
+    - git push --mirror "https://${GITHUB_ACTOR}:${GITHUB_TOKEN}@github.com/ORNL/cassiopeia.git"
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "push"
