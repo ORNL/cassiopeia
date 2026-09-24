@@ -1,7 +1,9 @@
 mirror-to-github:
   stage: deploy
   tags: [mirror-to-github]
-  image: alpine/git:latest
+  image:
+    name: alpine/git:latest
+    entrypoint: [""]
   variables:
     GIT_STRATEGY: clone
     GIT_DEPTH: 0          # full history needed to mirror
