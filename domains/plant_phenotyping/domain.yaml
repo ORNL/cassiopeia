@@ -26,11 +26,11 @@ facets:
       - {value: poplar,       label: Poplar,       detail: Populus spp.,            aliases: [poplar, populus]}
       - {value: pennycress,   label: Pennycress,   detail: Thlaspi arvense,         aliases: [pennycress, thlaspi]}
       - {value: arabidopsis,  label: Arabidopsis,  detail: Arabidopsis thaliana,    aliases: [arabidopsis]}
-      - {value: soybean,      label: Soybean,      detail: Glycine max,             aliases: [soybean, glycine max]}
+      - {value: noccaea,      label: Noccaea,      detail: Noccaea caerulescens,    aliases: [noccaea, thlaspi caerulescens, alpine pennycress]}
       - {value: sorghum,      label: Sorghum,      detail: Sorghum bicolor,         aliases: [sorghum]}
       - {value: switchgrass,  label: Switchgrass,  detail: Panicum virgatum,        aliases: [switchgrass, panicum virgatum]}
       - {value: miscanthus,   label: Miscanthus,   detail: "Miscanthus × giganteus", aliases: [miscanthus]}
-      - {value: brachypodium, label: Brachypodium, detail: Brachypodium distachyon, aliases: [brachypodium]}
+      - {value: odontarrhena, label: Odontarrhena, detail: Odontarrhena spp. (syn. Alyssum), aliases: [odontarrhena, alyssum]}
 
   - key: stress
     label: Stress Types

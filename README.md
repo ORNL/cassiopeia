@@ -30,7 +30,7 @@ All sources are free and require no API keys.
 
 Queries are generated from a **researcher profile** that captures:
 
-- Plant species of interest (poplar, arabidopsis, soybean, …)
+- Plant species of interest (poplar, pennycress, Noccaea, Odontarrhena, …)
 - Stress types (drought, salinity, nutrient, temperature, …)
 - Phenotyping methods (hyperspectral imaging, root imaging, …)
 - Free-text expertise keywords
