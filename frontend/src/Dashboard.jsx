@@ -907,7 +907,7 @@ function SessionHistory({ sessions }) {
         return (
           <div key={s.session_id} style={S.sessionRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
-              <span style={S.sessionDate}>{s.timestamp.slice(0, 16).replace("T", " ")}</span>
+              <span style={S.sessionDate}>{new Date(s.timestamp).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
               <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
