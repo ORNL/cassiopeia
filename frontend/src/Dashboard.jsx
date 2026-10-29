@@ -908,7 +908,14 @@ function SessionHistory({ sessions }) {
           <div key={s.session_id} style={S.sessionRow}>
             <div style={{ display: "flex", alignItems: "center", gap: 16, width: "100%" }}>
               <span style={S.sessionDate}>{new Date(s.timestamp).toLocaleString([], { dateStyle: "medium", timeStyle: "short" })}</span>
-              <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
+              {p.trigger === "scheduled" ? (
+                <>
+                  <span style={S.sessionAuto} title="Background scan run automatically on the scan interval">Scheduled</span>
+                  <span style={S.sessionMeta}>{s.n_papers} papers · +{p.new_papers ?? 0} new</span>
+                </>
+              ) : (
+                <span style={S.sessionMeta}>{s.n_papers} papers · {s.n_proposals} proposals</span>
+              )}
             </div>
             <div style={{ display: "flex", gap: 6, flexWrap: "wrap", width: "100%", paddingBottom: 4 }}>
               {chipFacets.map((f, i) => (p.facets?.[f.key] || []).map((v) => (
@@ -1734,6 +1741,7 @@ const S = {
   sessionRow: { display: "flex", flexDirection: "column", gap: 6, padding: "10px 0", borderBottom: "1px solid #1e293b" },
   sessionDate: { fontSize: 12, color: "#64748b", fontVariantNumeric: "tabular-nums", minWidth: 130 },
   sessionMeta: { fontSize: 12, color: "#94a3b8", fontWeight: 600 },
+  sessionAuto: { fontSize: 10, padding: "2px 7px", borderRadius: 8, border: "1px solid #3f3a1e", background: "#1f1c0c", color: "#facc15" },
   sesChip: { fontSize: 10, padding: "2px 7px", borderRadius: 8, border: "1px solid #2d3f55", background: "#0f2033", color: "#7dd3fc" },
   sesChipAlt: { borderColor: "#3d2d1a", background: "#1a1008", color: "#fdba74" },
   sesChipSrc: { borderColor: "#1e3a2a", background: "#0a1a12", color: "#6ee7b7" },

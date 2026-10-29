@@ -117,3 +117,41 @@ def test_collect_new_pairs_mixed_known_and_new():
     pairs = agent._collect_new_pairs("r1", results, known_dois={"10.1/old"}, known_ids=set())
     assert len(pairs) == 1
     assert pairs[0][1].paper_id == "new"
+
+
+# ---------------------------------------------------------------------------
+# _scan_researcher: scheduled scans are recorded as sessions
+# ---------------------------------------------------------------------------
+
+async def test_scheduled_scan_records_a_session(tmp_path):
+    from unittest.mock import AsyncMock
+
+    from models.schemas import ResearcherProfile
+    from utils.persistence import PaperStore
+
+    agent = _make_agent()
+    agent.store = PaperStore(tmp_path / "test.db")
+    agent._run_scan = AsyncMock(return_value={"queries_executed": 7, "papers_found": 4, "total_papers": 4})
+    profile = ResearcherProfile(researcher_id="r1", name="Ada", facets={"species": ["noccaea"]})
+
+    await agent._scan_researcher("r1", profile)
+
+    agent._run_scan.assert_awaited_once_with("r1", profile, update_last_scan=True)
+    [session] = agent.store.get_sessions("r1")
+    assert session["profile"]["trigger"] == "scheduled"
+    assert session["profile"]["new_papers"] == 4
+    assert session["profile"]["facets"] == {"species": ["noccaea"]}
+    assert session["n_proposals"] == 0
+
+
+async def test_scheduled_scan_survives_a_session_write_failure(tmp_path):
+    from unittest.mock import AsyncMock
+
+    from models.schemas import ResearcherProfile
+
+    agent = _make_agent()
+    agent.store = MagicMock()
+    agent.store.save_session.side_effect = RuntimeError("db locked")
+    agent._run_scan = AsyncMock(return_value={"queries_executed": 1, "papers_found": 0, "total_papers": 0})
+
+    await agent._scan_researcher("r1", ResearcherProfile(researcher_id="r1", name="Ada"))

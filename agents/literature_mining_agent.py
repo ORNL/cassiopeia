@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -343,8 +344,30 @@ class LiteratureMiningAgent(Agent):
     async def _scan_researcher(
         self, rid: str, profile: ResearcherProfile
     ) -> None:
-        """Fetch and score new papers for one researcher."""
-        await self._run_scan(rid, profile, update_last_scan=True)
+        """Fetch and score new papers for one researcher.
+
+        Recorded as a "scheduled" session so the dashboard's history shows
+        that the background scan ran, even when it found nothing new.
+        """
+        result = await self._run_scan(rid, profile, update_last_scan=True)
+        try:
+            self.store.save_session(
+                session_id=str(uuid.uuid4()),
+                researcher_id=rid,
+                profile_snap={
+                    "name": profile.name,
+                    "facets": profile.facets,
+                    "expertise_keywords": profile.expertise_keywords,
+                    "source_targets": profile.source_targets,
+                    "time_range_months": profile.time_range_months,
+                    "trigger": "scheduled",
+                    "new_papers": result["papers_found"],
+                },
+                n_papers=len(self.store.known_paper_ids(rid)),
+                n_proposals=0,
+            )
+        except Exception as exc:
+            logger.warning("Could not record scheduled session for %s: %s", rid, exc)
 
     async def _run_scan(
         self,
