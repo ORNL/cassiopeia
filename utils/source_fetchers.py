@@ -39,6 +39,10 @@ _SIMPLE_TOKEN = re.compile(r"^\w+$")
 
 logger = logging.getLogger(__name__)
 
+# Largest page requested from a source in one call (Europe PMC allows 1000,
+# arXiv 2000); scans fetch deeper than they keep, see FETCH_DEPTH.
+MAX_PAGE_SIZE = 100
+
 _AND = " AND "
 _OR = " OR "
 
@@ -133,7 +137,7 @@ class EuropePMCFetcher(BaseFetcher):
         params: dict[str, Any] = {
             "query": full_query,
             "format": "json",
-            "pageSize": min(max_results, 25),
+            "pageSize": min(max_results, MAX_PAGE_SIZE),
             "resultType": "core",
         }
 
@@ -361,7 +365,7 @@ class ArxivFetcher(BaseFetcher):
 
         params: dict[str, Any] = {
             "search_query": terms,
-            "max_results": min(max_results, 25),
+            "max_results": min(max_results, MAX_PAGE_SIZE),
             "sortBy": "submittedDate",
             "sortOrder": "descending",
         }

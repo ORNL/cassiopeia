@@ -216,3 +216,39 @@ def test_sync_cross_product_uses_defaults_for_empty_facets():
     queries = QueryGenerator().generate_queries(profile)
     assert [q.base_terms for q in queries] == [["material", "property"]]
     assert queries[0].query_string == "material AND property"
+
+
+# ── variation between scheduled scans ────────────────────────────────────────
+
+async def _generate_with(profile, **kwargs):
+    mock = AsyncMock(return_value=_mock_llm_response(_MOCK_SYNONYMS))
+    with (
+        patch("utils.query_generator.get_llm_config", return_value=_mock_config()),
+        patch("litellm.acompletion", new=mock),
+    ):
+        queries = await QueryGenerator().generate_queries_async(profile, **kwargs)
+    return queries, mock.call_args.kwargs["temperature"]
+
+
+@pytest.mark.asyncio
+async def test_without_variation_queries_start_from_the_first_combination():
+    queries, temperature = await _generate_with(_profile(sources=["flagship"]), max_queries_per_source=1)
+    assert [q.base_terms[0] for q in queries] == ["graphite"]
+    assert temperature == 0.1
+
+
+@pytest.mark.asyncio
+async def test_variation_rotates_the_combinations_and_samples_synonyms():
+    """Two materials × one property: successive days start from a different
+    combination, so a one-query-per-source budget covers both over two scans."""
+    profile = _profile(sources=["flagship"])
+    day1, temperature = await _generate_with(profile, max_queries_per_source=1, variation=738000)
+    day2, _ = await _generate_with(profile, max_queries_per_source=1, variation=738001)
+    assert {day1[0].base_terms[0], day2[0].base_terms[0]} == {"graphite", "lithium iron phosphate"}
+    assert temperature > 0.1
+
+
+@pytest.mark.asyncio
+async def test_rotation_keeps_every_combination_when_the_budget_allows():
+    queries, _ = await _generate_with(_profile(sources=["flagship"]), variation=1)
+    assert sorted(q.base_terms[0] for q in queries) == ["graphite", "lithium iron phosphate"]

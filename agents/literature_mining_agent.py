@@ -42,6 +42,9 @@ from utils.user_settings import get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
+# How many results to request per query, as a multiple of the number kept.
+FETCH_DEPTH = 4
+
 
 class LiteratureMiningAgent(Agent):
     """Stateful Academy agent for literature mining.
@@ -349,7 +352,11 @@ class LiteratureMiningAgent(Agent):
         Recorded as a "scheduled" session so the dashboard's history shows
         that the background scan ran, even when it found nothing new.
         """
-        result = await self._run_scan(rid, profile, update_last_scan=True)
+        # The day number varies the queries from one daily scan to the next.
+        result = await self._run_scan(
+            rid, profile, update_last_scan=True,
+            variation=datetime.now(timezone.utc).toordinal(),
+        )
         try:
             self.store.save_session(
                 session_id=str(uuid.uuid4()),
@@ -377,6 +384,7 @@ class LiteratureMiningAgent(Agent):
         log_progress: bool = False,
         record_query_history: bool = False,
         update_last_scan: bool = False,
+        variation: int | None = None,
     ) -> dict[str, Any]:
         """Core scan pipeline shared by trigger_search and _scan_researcher.
 
@@ -387,14 +395,15 @@ class LiteratureMiningAgent(Agent):
         # Score papers with bounded concurrency so Azure keep-alive connections
         # are reused rather than opening many new sockets simultaneously.
         queries = await self.query_gen.generate_queries_async(
-            profile, max_queries_per_source=3
+            profile, max_queries_per_source=3, variation=variation
         )
 
         known_dois = self.store.known_dois(researcher_id)
         known_ids  = self.store.known_paper_ids(researcher_id)
         snapshot = list(self.state.scored_papers)
         pairs = self._collect_new_pairs(
-            researcher_id, await self._fetch_all(queries), known_dois, known_ids
+            researcher_id, await self._fetch_all(queries), known_dois, known_ids,
+            per_query_limit=self.max_papers_per_query,
         )
 
         if not pairs:
@@ -404,7 +413,8 @@ class LiteratureMiningAgent(Agent):
             )
             fallback = self.query_gen.generate_queries(profile, max_queries_per_source=2)
             pairs = self._collect_new_pairs(
-                researcher_id, await self._fetch_all(fallback), known_dois, known_ids
+                researcher_id, await self._fetch_all(fallback), known_dois, known_ids,
+                per_query_limit=self.max_papers_per_query,
             )
             if pairs:
                 logger.info("Rescue pass recovered %d new papers for %s", len(pairs), researcher_id)
@@ -464,9 +474,16 @@ class LiteratureMiningAgent(Agent):
         }
 
     async def _fetch_all(self, queries: list[SearchQuery]) -> list:
-        """Run all queries in parallel, returning raw gather results."""
+        """Run all queries in parallel, returning raw gather results.
+
+        Fetches FETCH_DEPTH times more results than are kept, so that once a
+        query's top results are all in the store, later scans reach further
+        down the source's ranking instead of returning the same papers.
+        """
+        depth = self.max_papers_per_query * FETCH_DEPTH
+
         async def _one(q: SearchQuery) -> tuple[SearchQuery, list[PaperMetadata]]:
-            return q, await get_fetcher(q.source_target).fetch(q, max_results=self.max_papers_per_query)
+            return q, await get_fetcher(q.source_target).fetch(q, max_results=depth)
         return await asyncio.gather(*(_one(q) for q in queries), return_exceptions=True)
 
     async def _enrich_abstracts(
@@ -510,12 +527,14 @@ class LiteratureMiningAgent(Agent):
         fetch_results: list,
         known_dois: set[str],
         known_ids: set[str],
+        per_query_limit: int | None = None,
     ) -> list[tuple[SearchQuery, PaperMetadata]]:
         """Extract (query, paper) pairs for papers not already in the store.
 
         Deduplicates by DOI when available, falling back to paper_id so that
         DOI-less papers (arXiv preprints, some preprints) are not re-scored on
-        every scan cycle.
+        every scan cycle.  ``per_query_limit`` keeps only the first new papers
+        of each query, in the order the source ranked them.
         """
         pairs: list[tuple[SearchQuery, PaperMetadata]] = []
         seen_dois: set[str] = set(known_dois)
@@ -525,13 +544,17 @@ class LiteratureMiningAgent(Agent):
                 logger.error("Monitor fetch error for %s: %s", rid, result)
                 continue
             query, papers = result
+            kept = 0
             for paper in papers:
+                if per_query_limit is not None and kept >= per_query_limit:
+                    break
                 doi = paper.doi or ""
                 if doi and doi in seen_dois:
                     continue
                 if paper.paper_id in seen_ids:
                     continue
                 pairs.append((query, paper))
+                kept += 1
                 if doi:
                     seen_dois.add(doi)
                 seen_ids.add(paper.paper_id)

@@ -115,8 +115,15 @@ class QueryGenerator:
         profile: ResearcherProfile,
         *,
         max_queries_per_source: int = 3,
+        variation: int | None = None,
     ) -> list[SearchQuery]:
         """Synonym-expansion + code-built OR-group queries.
+
+        ``variation`` (set by scheduled scans, e.g. to the day number) makes
+        successive scans differ for an unchanged profile: synonyms are sampled
+        at a higher temperature, and the term combinations are rotated so that
+        each scan starts from a different one instead of always the first
+        ``max_queries_per_source``.  ``None`` keeps the output reproducible.
 
         Step 1: ask the LLM for a synonym map for every expandable query facet.
         Step 2: build OR-group SearchQuery objects deterministically in code.
@@ -125,8 +132,10 @@ class QueryGenerator:
         structure — AND/OR logic, quoting, temporal filters — is built in code so
         it can never appear as a stray search term.
         """
-        synonyms = await self._expand_synonyms(profile)
-        queries = self._build_from_synonyms(profile, synonyms, max_queries_per_source)
+        synonyms = await self._expand_synonyms(profile, vary=variation is not None)
+        queries = self._build_from_synonyms(
+            profile, synonyms, max_queries_per_source, rotation=variation or 0
+        )
         if queries:
             logger.info(
                 "Generated %d queries for %s across %s",
@@ -164,7 +173,7 @@ class QueryGenerator:
             extra_rules=f"\n- {extra}" if extra else "",
         )
 
-    async def _expand_synonyms(self, profile: ResearcherProfile) -> dict:
+    async def _expand_synonyms(self, profile: ResearcherProfile, *, vary: bool = False) -> dict:
         """Call the LLM to get a {facet: {term: [synonyms]}} map. Empty on failure."""
         prompt = self._synonym_prompt(profile)
         if prompt is None:
@@ -178,7 +187,7 @@ class QueryGenerator:
                 **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=600,
-                temperature=0.1,
+                temperature=0.8 if vary else 0.1,
                 response_format={"type": "json_object"},
             )
             raw = response.choices[0].message.content.strip()
@@ -202,6 +211,8 @@ class QueryGenerator:
         profile: ResearcherProfile,
         synonyms: dict,
         max_per_source: int,
+        *,
+        rotation: int = 0,
     ) -> list[SearchQuery]:
         """Build OR-group SearchQuery objects from the LLM synonym map.
 
@@ -217,13 +228,15 @@ class QueryGenerator:
         selections = [
             _selected(profile, f, use_default=f.role == "subject") for f in facets
         ]
+        combos = list(cartesian(*selections))
+        if combos and rotation:
+            start = rotation % len(combos)
+            combos = combos[start:] + combos[:start]
         queries: list[SearchQuery] = []
 
         for source in self._allowed_sources(profile):
             override = self.domain.sources[source].synonym_override
-            for count, combo in enumerate(cartesian(*selections)):
-                if count >= max_per_source:
-                    break
+            for combo in combos[:max_per_source]:
                 last = len(facets) - 1
                 term_groups = [
                     self._term_group(facet, value, synonyms, kws if i == last else [], override)

@@ -36,7 +36,7 @@ Queries are generated from a **researcher profile** that captures:
 - Free-text expertise keywords
 - A time window (default: last 12 months, configurable up to 10 years)
 
-The `QueryGenerator` crosses the pack's query facets — here **species × stress** — and dispatches one query per source. Up to 20 papers are retrieved per query.
+The `QueryGenerator` crosses the pack's query facets — here **species × stress** — and dispatches one query per source. Each query fetches up to 80 results and keeps the first 20 not already in the library, so repeated scans reach further down the source's ranking. Scheduled daily scans also vary their queries — synonyms are resampled and the term combinations rotate — while manual searches stay reproducible.
 
 > **Design note — why methods are excluded from queries.** Phenotyping methods are assessed *post-retrieval* by the LLM scorer, which handles synonyms and paraphrases (e.g. *"VNIR spectroscopy"* → hyperspectral imaging). Pre-filtering at query time would silently discard relevant papers whose abstracts use different but equivalent terminology.
 

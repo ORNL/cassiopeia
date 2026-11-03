@@ -136,7 +136,10 @@ async def test_scheduled_scan_records_a_session(tmp_path):
 
     await agent._scan_researcher("r1", profile)
 
-    agent._run_scan.assert_awaited_once_with("r1", profile, update_last_scan=True)
+    args, kwargs = agent._run_scan.call_args
+    assert args == ("r1", profile)
+    assert kwargs["update_last_scan"] is True
+    assert isinstance(kwargs["variation"], int)  # scheduled scans vary their queries
     [session] = agent.store.get_sessions("r1")
     assert session["profile"]["trigger"] == "scheduled"
     assert session["profile"]["new_papers"] == 4
@@ -155,3 +158,25 @@ async def test_scheduled_scan_survives_a_session_write_failure(tmp_path):
     agent._run_scan = AsyncMock(return_value={"queries_executed": 1, "papers_found": 0, "total_papers": 0})
 
     await agent._scan_researcher("r1", ResearcherProfile(researcher_id="r1", name="Ada"))
+
+
+def test_collect_new_pairs_keeps_first_unseen_per_query():
+    """With a per-query limit, already-stored papers don't use up the quota:
+    the scan reaches further down the source's ranking."""
+    agent = _make_agent()
+    q = _query()
+    ranked = [_paper(f"p{i}", doi=f"10.1/{i}") for i in range(6)]
+    known = {"10.1/0", "10.1/1"}
+    pairs = agent._collect_new_pairs("r1", [(q, ranked)], known_dois=known, known_ids=set(),
+                                     per_query_limit=3)
+    assert [p.paper_id for _, p in pairs] == ["p2", "p3", "p4"]
+
+
+def test_collect_new_pairs_limit_applies_per_query():
+    agent = _make_agent()
+    q1, q2 = _query("a"), _query("b")
+    r1 = [_paper(f"a{i}", doi=f"10.1/a{i}") for i in range(3)]
+    r2 = [_paper(f"b{i}", doi=f"10.1/b{i}") for i in range(3)]
+    pairs = agent._collect_new_pairs("r1", [(q1, r1), (q2, r2)], known_dois=set(), known_ids=set(),
+                                     per_query_limit=2)
+    assert [p.paper_id for _, p in pairs] == ["a0", "a1", "b0", "b1"]
