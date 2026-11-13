@@ -75,6 +75,13 @@ PROVIDERS: dict[str, dict] = {
 }
 
 
+# Claude 5.5 models think before they answer, and the thinking counts against
+# max_tokens: a cap sized for the answer alone can end the reply before any text
+# is written (content None).  Every LLM call adds this to the room it needs for
+# its answer; only the tokens actually generated are billed.
+THINKING_HEADROOM = 4000
+
+
 # ── LLMConfig ──────────────────────────────────────────────────────────────────
 
 @dataclass

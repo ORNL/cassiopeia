@@ -23,6 +23,7 @@ import litellm
 
 from domains import DomainPack, current_domain
 from utils.json_utils import parse_json_response
+from utils.user_settings import THINKING_HEADROOM
 
 logger = logging.getLogger(__name__)
 
@@ -187,12 +188,12 @@ async def critique_proposal(
             response = await litellm.acompletion(
                 **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=1500,
+                max_tokens=1500 + THINKING_HEADROOM,
                 response_format={"type": "json_object"},
                 temperature=0.3,
                 timeout=120,
             )
-            raw = response.choices[0].message.content.strip()
+            raw = (response.choices[0].message.content or "").strip()
             data = parse_json_response(raw)
             # Validate required keys — raises KeyError to trigger retry
             for key in ("novelty", "evidence_strength", "overall_recommendation", "summary"):

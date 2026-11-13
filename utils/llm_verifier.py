@@ -21,6 +21,7 @@ import logging
 import litellm
 
 from utils.json_utils import parse_json_response
+from utils.user_settings import THINKING_HEADROOM
 
 logger = logging.getLogger(__name__)
 
@@ -71,12 +72,12 @@ async def verify_claim(
             response = await litellm.acompletion(
                 **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
+                max_tokens=200 + THINKING_HEADROOM,
                 response_format={"type": "json_object"},
                 temperature=0.0,
                 timeout=15,
             )
-            raw = response.choices[0].message.content.strip()
+            raw = (response.choices[0].message.content or "").strip()
             data = parse_json_response(raw)
             return {
                 "supported": bool(data["supported"]),

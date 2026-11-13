@@ -20,7 +20,7 @@ import litellm
 
 from domains import DomainPack, Facet, current_domain, term_text
 from utils.json_utils import parse_json_response
-from utils.user_settings import get_llm_config, LLMNotConfiguredError
+from utils.user_settings import THINKING_HEADROOM, get_llm_config, LLMNotConfiguredError
 
 from models.schemas import ResearcherProfile, SearchQuery
 
@@ -186,7 +186,7 @@ class QueryGenerator:
             response = await litellm.acompletion(
                 **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
+                max_tokens=600 + THINKING_HEADROOM,
                 temperature=0.8 if vary else 0.1,
                 response_format={"type": "json_object"},
             )

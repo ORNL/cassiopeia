@@ -12,6 +12,7 @@ from typing import Any
 import litellm
 
 from utils.json_utils import parse_json_response
+from utils.user_settings import THINKING_HEADROOM
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +84,7 @@ class FeasibilityEvaluator:
             response = await litellm.acompletion(
                 **llm_kwargs,
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=600,
+                max_tokens=600 + THINKING_HEADROOM,
                 response_format={"type": "json_object"},
                 temperature=0.1,
                 timeout=120,

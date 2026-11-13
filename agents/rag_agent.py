@@ -37,7 +37,7 @@ from utils.json_utils import parse_json_response
 from utils.persistence import PaperStore
 from utils.rag_store import RAGStore
 from utils.source_fetchers import get_fetcher, source_registry
-from utils.user_settings import get_llm_config, LLMNotConfiguredError
+from utils.user_settings import THINKING_HEADROOM, get_llm_config, LLMNotConfiguredError
 
 logger = logging.getLogger(__name__)
 
@@ -451,7 +451,7 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             **llm_r,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=8000,
+            max_tokens=8000 + THINKING_HEADROOM,
             response_format={"type": "json_object"},
             temperature=0.4,
             timeout=180,
@@ -934,12 +934,12 @@ class RAGAgent(Agent):
             response = await litellm.acompletion(
                 **state["llm_s"],
                 messages=[{"role": "user", "content": prompt}],
-                max_tokens=400,
+                max_tokens=400 + THINKING_HEADROOM,
                 response_format={"type": "json_object"},
                 temperature=0.0,
                 timeout=60,
             )
-            raw = response.choices[0].message.content.strip()
+            raw = (response.choices[0].message.content or "").strip()
             data = parse_json_response(raw)
             sub_queries = [str(q) for q in data.get("sub_queries", [])][:_MAX_SUB_QUERIES_PER_ITERATION]
             done = bool(data.get("done", False))
@@ -1130,7 +1130,7 @@ class RAGAgent(Agent):
                     n=len(hits),
                     context=context,
                 )}],
-                max_tokens=2500,
+                max_tokens=2500 + THINKING_HEADROOM,
                 response_format={"type": "json_object"},
                 temperature=0.2,
                 timeout=150,
@@ -1357,7 +1357,7 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             **llm_r,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=800,
+            max_tokens=800 + THINKING_HEADROOM,
             temperature=0.3,
             timeout=120,
         )

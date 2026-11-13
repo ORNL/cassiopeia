@@ -43,6 +43,7 @@ from models.schemas import (
 )
 from utils.paper_scorer import PaperScorer
 from utils.json_utils import parse_json_response
+from utils.user_settings import THINKING_HEADROOM
 
 logger = logging.getLogger(__name__)
 
@@ -239,12 +240,12 @@ class LLMPaperScorer:
         response = await litellm.acompletion(
             **llm_kwargs,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=384,
+            max_tokens=384 + THINKING_HEADROOM,
             response_format={"type": "json_object"},
             temperature=0.0,
             timeout=15,
         )
-        raw = response.choices[0].message.content.strip()
+        raw = (response.choices[0].message.content or "").strip()
         data = parse_json_response(raw)
         scores = data.get("scores") or {}
         return {

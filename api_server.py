@@ -45,7 +45,7 @@ from utils.json_utils import parse_json_response, strip_json_fence
 from utils.data_paths import default_db_path
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
-from utils.user_settings import get_llm_config, LLMNotConfiguredError
+from utils.user_settings import THINKING_HEADROOM, get_llm_config, LLMNotConfiguredError
 
 recommended_logging(logging.INFO).init_logging()
 logger = logging.getLogger(__name__)
@@ -221,7 +221,7 @@ async def extract_keywords(
         response = await litellm.acompletion(
             **llm_kwargs,
             messages=[{"role": "user", "content": _KEYWORD_EXTRACT_PROMPT.format(text=req.text[:1500])}],
-            max_tokens=120,
+            max_tokens=120 + THINKING_HEADROOM,
             response_format={"type": "json_object"},
             temperature=0.0,
         )
