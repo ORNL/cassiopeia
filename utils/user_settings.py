@@ -49,7 +49,9 @@ PROVIDERS: dict[str, dict] = {
         "display_name": "Model Access Gateway (MAG)",
         "scoring_model": os.environ.get("AMSC_SCORING_MODEL", "anthropic/claude-haiku-4-5"),
         "reasoning_model": os.environ.get("AMSC_REASONING_MODEL", "anthropic/claude-sonnet-4-6"),
-        "api_base": "https://api.i2-core.american-science-cloud.org",
+        "api_base": os.environ.get(
+            "AMSC_API_BASE", "https://mag.genesis.americansciencecloud.org"
+        ),
     },
     "anthropic": {
         "display_name": "Anthropic",
