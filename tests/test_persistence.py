@@ -281,3 +281,26 @@ def test_migration_leaves_new_rows_untouched(store):
     store.save_profile(_profile())
     store._migrate_to_facets()
     assert store.load_profiles()[0].facets["material"] == ["graphite"]
+
+
+# ---------------------------------------------------------------------------
+# LLMConfig: providers that take the key as a Bearer token
+# ---------------------------------------------------------------------------
+
+def test_mag_key_is_sent_as_a_bearer_token():
+    from utils.user_settings import PROVIDERS, LLMConfig
+
+    spec = PROVIDERS["amsc"]
+    cfg = LLMConfig(provider="amsc", scoring_model=spec["scoring_model"],
+                    reasoning_model=spec["reasoning_model"], api_key="pat-123",
+                    api_base=spec["api_base"], bearer_auth=spec["bearer_auth"])
+    for kwargs in (cfg.for_scoring(), cfg.for_reasoning()):
+        assert kwargs["extra_headers"] == {"Authorization": "Bearer pat-123"}
+        assert kwargs["api_base"] == spec["api_base"]
+
+
+def test_other_providers_send_no_extra_headers():
+    from utils.user_settings import LLMConfig
+
+    cfg = LLMConfig(provider="anthropic", scoring_model="m", reasoning_model="m", api_key="k")
+    assert "extra_headers" not in cfg.for_scoring()

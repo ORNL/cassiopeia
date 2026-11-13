@@ -52,6 +52,9 @@ PROVIDERS: dict[str, dict] = {
         "api_base": os.environ.get(
             "AMSC_API_BASE", "https://mag.genesis.americansciencecloud.org"
         ),
+        # The gateway takes the personal access token as a Bearer token and
+        # refuses it as x-api-key, which is what litellm's Anthropic client sends.
+        "bearer_auth": True,
     },
     "anthropic": {
         "display_name": "Anthropic",
@@ -84,6 +87,7 @@ class LLMConfig:
     api_key: str
     api_base: str | None = None
     api_version: str | None = None
+    bearer_auth: bool = False
 
     def for_scoring(self) -> dict:
         """LiteLLM kwargs for fast/cheap calls (haiku-tier)."""
@@ -99,6 +103,8 @@ class LLMConfig:
             d["api_base"] = self.api_base
         if self.api_version:
             d["api_version"] = self.api_version
+        if self.bearer_auth:
+            d["extra_headers"] = {"Authorization": f"Bearer {self.api_key}"}
         return d
 
 
@@ -232,4 +238,5 @@ def get_llm_config(researcher_id: str) -> LLMConfig:
         api_key=api_key,
         api_base=spec.get("api_base"),
         api_version=spec.get("api_version"),
+        bearer_auth=spec.get("bearer_auth", False),
     )
