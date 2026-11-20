@@ -208,6 +208,18 @@ class DomainPack:
     def query_facets(self) -> tuple[Facet, ...]:
         return tuple(f for f in self.facets if f.in_queries)
 
+    def journal_tier(self, journal: str | None, issns: list[str] | tuple[str, ...] = ()) -> str | None:
+        """"high" / "mid" when the journal is on a credibility list — by any of its
+        ISSNs, or by title — else None."""
+        keys = {issn_key(i) for i in issns} - {""}
+        keys.add(journal_key(journal))
+        keys.discard("")
+        if keys & self.high_impact_journals:
+            return "high"
+        if keys & self.mid_impact_journals:
+            return "mid"
+        return None
+
     def validate_facets(self, facets: dict[str, list[str]] | None) -> dict[str, list[str]]:
         """Keep only declared facets and, for closed vocabularies, known values."""
         facets = facets or {}
@@ -295,6 +307,28 @@ class DomainPack:
             ],
             "evaluators": [{"key": e.key, "label": e.label} for e in self.evaluators],
         }
+
+
+_ISSN = re.compile(r"^\d{4}-?\d{3}[\dXx]$")
+
+
+def journal_key(name: str | None) -> str:
+    """A journal title as the credibility lists compare it: lower case, no leading
+    "the", no subtitle or place in parentheses. Europe PMC's "The Plant journal :
+    for cell and molecular biology" and the pack's "plant journal" become one key."""
+    text = (name or "").lower()
+    text = re.split(r"\s+:\s+|\s*\(", text, maxsplit=1)[0]
+    text = re.sub(r"[^a-z0-9&]+", " ", text).strip()
+    return text.removeprefix("the ").strip()
+
+
+def issn_key(value: str | None) -> str:
+    """`1674-2052` / `16742052` / `1674-205x` -> `1674-205X`; "" when not an ISSN."""
+    text = (value or "").strip()
+    if not _ISSN.match(text):
+        return ""
+    text = text.replace("-", "").upper()
+    return f"{text[:4]}-{text[4:]}"
 
 
 def term_text(value: str) -> str:
@@ -459,8 +493,11 @@ def pack_from_dict(raw: dict, root: Path, *, run_hooks: bool = True) -> DomainPa
         critique_dimensions = tuple(
             CritiqueDimension(**d) for d in critique.get("dimensions") or ()
         )
-        high = frozenset(j.lower() for j in credibility.get("high_impact_journals") or ())
-        mid = frozenset(j.lower() for j in credibility.get("mid_impact_journals") or ())
+        # Each entry is a title or an ISSN, compared as journal_tier() compares them.
+        def _keys(entries):
+            return frozenset(issn_key(str(j)) or journal_key(str(j)) for j in entries or ()) - {""}
+        high = _keys(credibility.get("high_impact_journals"))
+        mid = _keys(credibility.get("mid_impact_journals"))
     except KeyError as exc:
         raise DomainPackError(f"Domain pack {name!r}: missing required field {exc}") from exc
     except (TypeError, AttributeError) as exc:

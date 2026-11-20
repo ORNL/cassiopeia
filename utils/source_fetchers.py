@@ -300,6 +300,9 @@ class EuropePMCFetcher(BaseFetcher):
                 authors = [a.strip() for a in item["authorString"].split(",")][:5]
 
             doi = item.get("doi")
+            # resultType=core puts the journal under journalInfo; journalTitle is
+            # only in the lite records.
+            jour = (item.get("journalInfo") or {}).get("journal") or {}
             papers.append(
                 PaperMetadata(
                     paper_id=item.get("id") or doi or "",
@@ -312,7 +315,8 @@ class EuropePMCFetcher(BaseFetcher):
                     published_date=self._parse_date(
                         item.get("firstPublicationDate", "")
                     ),
-                    journal=item.get("journalTitle", ""),
+                    journal=jour.get("title") or item.get("journalTitle", ""),
+                    journal_issns=[i for i in (jour.get("issn"), jour.get("essn")) if i],
                     keywords=[
                         kw if isinstance(kw, str) else kw.get("keyword", "")
                         for kw in item.get("keywordList", {}).get("keyword", [])

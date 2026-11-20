@@ -210,3 +210,44 @@ def test_rank_papers_descending_by_overall(scorer):
 
 def test_rank_papers_empty_list(scorer):
     assert scorer.rank_papers([]) == []
+
+
+def test_journal_tiers_match_europe_pmc_titles_and_issns(scorer):
+    """Europe PMC names journals "The Plant journal : for cell and molecular biology"
+    or "Science (New York, N.Y.)"; the pack lists "plant journal" or an ISSN."""
+    from domains import issn_key, journal_key
+
+    assert journal_key("The Plant journal : for cell and molecular biology") == "plant journal"
+    assert journal_key("Science (New York, N.Y.)") == "science"
+    assert journal_key("Nature materials") == "nature materials"
+    assert issn_key("1674-205x") == "1674-205X" and issn_key("16742052") == "1674-2052"
+    assert issn_key("Nature") == ""
+
+    pack = scorer.domain
+    assert pack.journal_tier("Nature materials") == "high"
+    assert pack.journal_tier("Nature Materials : a journal") == "high"
+    assert pack.journal_tier("Nature") is None                      # no prefix matching
+    assert pack.journal_tier("", ["0378-7753"]) is None             # not listed by ISSN
+
+
+def test_a_pack_can_list_a_journal_by_issn(_test_domain_pack):
+    import dataclasses
+
+    pack = dataclasses.replace(_test_domain_pack, high_impact_journals=frozenset({"1674-2052"}))
+    assert pack.journal_tier("Molecular plant", ["1674-2052", "1752-9867"]) == "high"
+    assert pack.journal_tier(None, ["1752-9867", "1674-2052"]) == "high"
+    assert pack.journal_tier("Molecular plant") is None
+
+
+def test_credibility_reads_the_journal_europe_pmc_returns(scorer):
+    from utils.source_fetchers import get_fetcher
+
+    fetcher = get_fetcher("flagship")
+    [paper] = fetcher._parse_europepmc({"resultList": {"result": [{
+        "id": "1", "title": "t", "doi": "10.1/x",
+        "journalInfo": {"journal": {"title": "Nature materials", "issn": "1476-1122", "essn": "1476-4660"}},
+    }]}})
+
+    assert paper.journal == "Nature materials"
+    assert paper.journal_issns == ["1476-1122", "1476-4660"]
+    assert scorer._score_credibility(paper) >= 0.7

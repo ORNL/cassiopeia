@@ -87,6 +87,7 @@ class PaperMetadata:
     url: str | None = None
     published_date: datetime | None = None
     journal: str | None = None
+    journal_issns: list[str] = field(default_factory=list)   # print and electronic
     keywords: list[str] = field(default_factory=list)
     is_open_access: bool = False
     citation_count: int = 0

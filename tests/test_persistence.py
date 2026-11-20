@@ -304,3 +304,47 @@ def test_other_providers_send_no_extra_headers():
 
     cfg = LLMConfig(provider="anthropic", scoring_model="m", reasoning_model="m", api_key="k")
     assert "extra_headers" not in cfg.for_scoring()
+
+
+# ---------------------------------------------------------------------------
+# journal backfill (papers stored before the fetcher read journalInfo)
+# ---------------------------------------------------------------------------
+
+def test_backfill_gives_old_papers_their_journal_and_rescores_them(store, monkeypatch):
+    import json
+
+    from utils import backfill_journals
+
+    store.save_profile(_profile())
+    old = _scored_paper("111")
+    old.paper.journal = ""                                     # as stored by the old fetcher
+    old.relevance.credibility = 0.3
+    store.save_paper(old, "r1")
+    keep = _scored_paper("222", doi="10.1/keep")               # already has a journal
+    store.save_paper(keep, "r1")
+    monkeypatch.setattr(backfill_journals, "_lookup", lambda ids: {
+        "111": {"title": "Nature materials", "issn": "1476-1122", "essn": "1476-4660"}})
+
+    report = backfill_journals.backfill(store)
+
+    assert report["without_journal"] == 1 and report["found"] == 1 and report["high_tier"] == 1
+    [paper] = [p for p in store.load_papers("r1") if p.paper.paper_id == "111"]
+    assert paper.paper.journal == "Nature materials"
+    assert paper.paper.journal_issns == ["1476-1122", "1476-4660"]
+    assert paper.relevance.credibility >= 0.7                 # high tier, OA, cited
+    assert paper.relevance.overall != old.relevance.overall
+    untouched = json.loads(store._conn.execute(
+        "SELECT data FROM papers WHERE paper_id = '222'").fetchone()["data"])
+    assert untouched["journal"] == "Plant Physiology"
+
+
+def test_backfill_dry_run_writes_nothing(store, monkeypatch):
+    from utils import backfill_journals
+
+    old = _scored_paper("111")
+    old.paper.journal = ""
+    store.save_paper(old, "r1")
+    monkeypatch.setattr(backfill_journals, "_lookup", lambda ids: {"111": {"title": "Nature materials"}})
+
+    assert backfill_journals.backfill(store, dry_run=True)["found"] == 1
+    assert store.load_papers("r1")[0].paper.journal == ""

@@ -109,10 +109,10 @@ class PaperScorer:
 
     def _score_credibility(self, paper: PaperMetadata) -> float:
         score = 0.3  # baseline
-        journal = (paper.journal or "").lower()
-        if journal in self.domain.high_impact_journals:
+        tier = self.domain.journal_tier(paper.journal, paper.journal_issns)
+        if tier == "high":
             score += 0.4
-        elif journal in self.domain.mid_impact_journals:
+        elif tier == "mid":
             score += 0.2
         if paper.is_open_access:
             score += 0.1
@@ -145,10 +145,10 @@ class PaperScorer:
         source = self.domain.sources.get(paper.source)
         if source is not None and source.preprint:
             return CredibilityLevel.PRELIMINARY
-        journal = (paper.journal or "").lower()
+        tier = self.domain.journal_tier(paper.journal, paper.journal_issns)
         impact = source.impact if source is not None else None
-        high_journal = journal in self.domain.high_impact_journals or impact == "high"
-        mid_journal = journal in self.domain.mid_impact_journals or impact == "mid"
+        high_journal = tier == "high" or impact == "high"
+        mid_journal = tier == "mid" or impact == "mid"
         if high_journal and paper.citation_count > 5:
             return CredibilityLevel.HIGH
         if high_journal or (mid_journal and paper.citation_count > 5):
