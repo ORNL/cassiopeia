@@ -116,6 +116,22 @@ sources:
   - {key: plant_physiology, label: Plant Physiology, backend: europepmc, filter: 'JOURNAL:"Plant Physiology"',
      access: paywall, impact: high,
      description: "Plant science — abstracts"}
+  # Grouped by ISSN: one source, one set of queries, for several journals. The
+  # numbers in parentheses are OpenAlex 2-year mean citedness (an impact-factor
+  # analogue) and Europe PMC coverage of 2024-25 articles, measured 2026-11-20.
+  # Plant Phenomics (10.2, 100% full text), Plant Methods (6.8, 100%),
+  # The Plant Genome (5.3, 100%)
+  - {key: phenotyping_methods, label: Phenotyping & methods, backend: europepmc,
+     filter: "(ISSN:2097-0374 OR ISSN:2643-6515 OR ISSN:1746-4811 OR ISSN:1940-3372)",
+     access: open, impact: mid,
+     description: "Plant Phenomics, Plant Methods, Plant Genome — full text (citedness 5–10)"}
+  # Remote Sensing of Environment (14.0), Computers and Electronics in Agriculture
+  # (12.8), Field Crops Research (9.2): not in MEDLINE, so the pubmed source never
+  # reaches them; Europe PMC has every abstract, no full text.
+  - {key: field_sensing, label: Field & sensing, backend: europepmc,
+     filter: "(ISSN:0034-4257 OR ISSN:1879-0704 OR ISSN:0168-1699 OR ISSN:1872-7107 OR ISSN:0378-4290 OR ISSN:1872-6852)",
+     access: paywall, impact: high,
+     description: "Remote Sens. Environ., Comput. Electron. Agric., Field Crops Res. — abstracts (citedness 9–14)"}
   # arXiv covers computational/quantitative biology: plant physiology synonyms
   # return nothing there, so the condition group uses keywords or these terms.
   - {key: arxiv, label: arXiv, backend: arxiv,
@@ -134,6 +150,25 @@ credibility:
     - plant physiology
     - the plant journal
     - nature plants
+    # Added by ISSN (titles vary in Europe PMC), with OpenAlex 2-year mean citedness:
+    - "1674-2052"   # Molecular Plant (18.6)
+    - "1752-9867"   # Molecular Plant (electronic)
+    - "1752-9859"   # Molecular Plant (alternate)
+    - "1360-1385"   # Trends in Plant Science (9.4)
+    - "1878-4372"   # Trends in Plant Science (electronic)
+    - "2590-3462"   # Plant Communications (11.8)
+    - "2643-6515"   # Plant Phenomics (10.2)
+    - "2097-0374"   # Plant Phenomics (alternate)
+    - "1467-7644"   # Plant Biotechnology Journal (10.0)
+    - "1467-7652"   # Plant Biotechnology Journal (electronic)
+    - "2052-7276"   # Horticulture Research (9.4)
+    - "2662-6810"   # Horticulture Research (electronic)
+    - "0034-4257"   # Remote Sensing of Environment (14.0)
+    - "1879-0704"   # Remote Sensing of Environment (electronic)
+    - "0168-1699"   # Computers and Electronics in Agriculture (12.8)
+    - "1872-7107"   # Computers and Electronics in Agriculture (electronic)
+    - "0378-4290"   # Field Crops Research (9.2)
+    - "1872-6852"   # Field Crops Research (electronic)
   mid_impact_journals:
     - frontiers in plant science
     - plos one
@@ -141,6 +176,13 @@ credibility:
     - plant methods
     - journal of experimental botany
     - annals of botany
+    - "1940-3372"   # The Plant Genome (5.3)
+    - "0168-9452"   # Plant Science (5.0)
+    - "1873-2259"   # Plant Science (electronic)
+    - "0032-0781"   # Plant and Cell Physiology (4.9)
+    - "1471-9053"   # Plant and Cell Physiology (electronic)
+    - "0040-5752"   # Theoretical and Applied Genetics (4.8)
+    - "1432-2242"   # Theoretical and Applied Genetics (electronic)
 
 # ── Prompt wording ───────────────────────────────────────────────────────────
 prompts:
