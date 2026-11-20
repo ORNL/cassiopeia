@@ -451,10 +451,12 @@ class RAGAgent(Agent):
         response = await litellm.acompletion(
             **llm_r,
             messages=[{"role": "user", "content": prompt}],
-            max_tokens=8000 + THINKING_HEADROOM,
+            # Up to 10 proposals (utils/synthesis_size.py), each with its rationale
+            # and citations: room for all of them, and the time to write them.
+            max_tokens=16000 + THINKING_HEADROOM,
             response_format={"type": "json_object"},
             temperature=0.4,
-            timeout=180,
+            timeout=300,
         )
         choice = response.choices[0]
         raw = (choice.message.content or "").strip()

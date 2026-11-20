@@ -43,6 +43,7 @@ from pydantic import BaseModel
 from academy.logging.recommended import recommended_logging
 
 from domains import current_domain
+from utils.synthesis_size import n_abstracts_for, n_proposals_for
 from utils.agent_bridge import _call, launch_agents
 from utils.data_paths import default_db_path
 from utils.persistence import PaperStore
@@ -257,11 +258,15 @@ async def search_literature(
             if _paper_store is not None:
                 liked = _paper_store.get_liked_proposals(researcher_id)
 
+            library = len(_paper_store.known_paper_ids(researcher_id)) if _paper_store else 0
+            n_proposals = n_proposals_for(library)
             rag_combos = await _call(
                 _rag_handle.synthesize_combinations(
                     researcher_id=researcher_id,
                     facets=facets,
                     keywords=expertise_keywords,
+                    n_proposals=n_proposals,
+                    n_papers=n_abstracts_for(n_proposals),
                     liked_proposals=liked or None,
                     with_critique=with_critique,
                     context=context,

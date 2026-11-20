@@ -42,6 +42,7 @@ from domains import current_domain
 from models.schemas import ResearcherProfile
 from utils.agent_bridge import _call, launch_agents, run_in_context
 from utils.json_utils import parse_json_response, strip_json_fence
+from utils.synthesis_size import n_abstracts_for, n_proposals_for
 from utils.data_paths import default_db_path
 from utils.persistence import PaperStore
 from utils.query_generator import QueryGenerator
@@ -278,21 +279,6 @@ async def preview_queries(
     return result[:12]
 
 
-def _n_proposals_for(papers_found: int) -> int:
-    """Scale proposal count with the number of newly fetched papers.
-
-    papers_found  →  n_proposals
-    0 – 24        →  2
-    25 – 49       →  3
-    50 – 74       →  4
-    75 – 99       →  5
-    100 – 124     →  6
-    …
-    200+          →  10  (cap)
-    """
-    return max(2, min(10, papers_found // 25 + 2))
-
-
 async def _run_rag_synthesis(
     researcher_id: str, req: SearchRequest, context: dict[str, list[str]], n_proposals: int = 5
 ) -> list:
@@ -329,6 +315,7 @@ async def _run_rag_synthesis(
                 facets=current_domain().validate_facets(req.facets),
                 keywords=req.expertise_keywords,
                 n_proposals=n_proposals,
+                n_papers=n_abstracts_for(n_proposals),
                 liked_proposals=liked or None,
                 with_critique=req.with_critique,
                 context=context,
@@ -570,7 +557,7 @@ async def search(req: SearchRequest, user: CurrentUser) -> dict[str, Any]:
         len(papers), len(combos),
     )
 
-    n_proposals = _n_proposals_for(papers_found)
+    n_proposals = n_proposals_for(len(papers))
     rag_combos = await _rag_synthesis_or_cached(researcher_id, req, context, papers_found, n_proposals)
 
     if _paper_store is not None:
